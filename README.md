@@ -1,1 +1,1 @@
-# h5n1_uk_scenario_modelling
+# Modelling scenarios of importation of H5N1 in the UK and the impact of interventions
