@@ -2,7 +2,7 @@ library(ggplot2)
 library(tidybayes)
 library(loo)
 
-#--- Fitting Gamma distributions
+#--- Loading fits
 fit_panel_a_white_gamma <- readRDS("fits/fit_panel_a_white_gamma.rds")
 fit_panel_a_black_gamma <- readRDS("fits/fit_panel_a_black_gamma.rds")
 fit_panel_b_white_gamma <- readRDS("fits/fit_panel_b_white_gamma.rds")
