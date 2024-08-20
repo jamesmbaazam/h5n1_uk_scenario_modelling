@@ -83,6 +83,3 @@ saveRDS(fit_panel_a_white_lognormal, "fits/fit_panel_a_white_lognormal.rds")
 saveRDS(fit_panel_a_black_lognormal, "fits/fit_panel_a_black_lognormal.rds")
 saveRDS(fit_panel_b_white_lognormal, "fits/fit_panel_b_white_lognormal.rds")
 saveRDS(fit_panel_b_black_lognormal, "fits/fit_panel_b_black_lognormal.rds")
-
-
-
