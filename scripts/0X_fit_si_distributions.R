@@ -1,7 +1,5 @@
 library(data.table)
 library(cmdstanr)
-library(ggplot2)
-library(tidybayes)
 
 #--- Loading in data
 dt_panel_a <- fread("data/si_raw_data/panel_a.csv")
@@ -76,73 +74,15 @@ fit_panel_b_black_lognormal <- mod_lognormal$sample(
   data = stan_data_panel_b_black, chains = 4, 
   iter_warmup = 1000, iter_sampling = 2000)
 
-#--- Extracting posterior predictive draws using tidybayes
-res_panel_a_white_gamma <- tidybayes::spread_draws(
-  fit_panel_a_white_gamma, y_rep[i]) |> data.table()
+#--- Saving fits
+saveRDS(fit_panel_a_white_gamma, "fits/fit_panel_a_white_gamma.rds")
+saveRDS(fit_panel_a_black_gamma, "fits/fit_panel_a_black_gamma.rds")
+saveRDS(fit_panel_b_white_gamma, "fits/fit_panel_b_white_gamma.rds")
+saveRDS(fit_panel_b_black_gamma, "fits/fit_panel_b_black_gamma.rds")
+saveRDS(fit_panel_a_white_lognormal, "fits/fit_panel_a_white_lognormal.rds")
+saveRDS(fit_panel_a_black_lognormal, "fits/fit_panel_a_black_lognormal.rds")
+saveRDS(fit_panel_b_white_lognormal, "fits/fit_panel_b_white_lognormal.rds")
+saveRDS(fit_panel_b_black_lognormal, "fits/fit_panel_b_black_lognormal.rds")
 
-res_panel_a_black_gamma <- tidybayes::spread_draws(
-  fit_panel_a_black_gamma, y_rep[i]) |> data.table()
 
-res_panel_b_white_gamma <- tidybayes::spread_draws(
-  fit_panel_b_white_gamma, y_rep[i]) |> data.table()
-
-res_panel_b_black_gamma <- tidybayes::spread_draws(
-  fit_panel_b_black_gamma, y_rep[i]) |> data.table()
-
-res_panel_a_white_lognormal <- tidybayes::spread_draws(
-  fit_panel_a_white_lognormal, y_rep[i]) |> data.table()
-
-res_panel_a_black_lognormal <- tidybayes::spread_draws(
-  fit_panel_a_black_lognormal, y_rep[i]) |> data.table()
-
-res_panel_b_white_lognormal <- tidybayes::spread_draws(
-  fit_panel_b_white_lognormal, y_rep[i]) |> data.table()
-
-res_panel_b_black_lognormal <- tidybayes::spread_draws(
-  fit_panel_b_black_lognormal, y_rep[i]) |> data.table()
-
-#--- Combining posterior predictive draws
-dt_draws_gamma <- 
-  rbind(
-    res_panel_a_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_a_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_b_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-    res_panel_b_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Gamma"]
-
-dt_draws_lognormal <- 
-  rbind(
-    res_panel_a_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_a_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_b_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-    res_panel_b_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Lognormal"]
-
-dt_draws <- rbind(dt_draws_gamma, dt_draws_lognormal)
-
-#--- Plotting
-dt_draws |> 
-  ggplot() + 
-  geom_density(aes(x = y_rep, fill = `Distribution`), alpha = 0.2) +
-  facet_grid(`Case type` ~ `Exposure type`) + 
-  lims(x = c(0, 30)) + 
-  labs(x = "Time (days)", y = "Probability density") + 
-  theme_minimal()
-
-dt_draws[order(`Exposure type`, `Case type`)][Distribution == "Lognormal"][
-  , .(mean = mean(y_rep), median = median(y_rep)), 
-  by = .(`Exposure type`, `Case type`)]
-
-#--- LOO-CV analysis for picking between Gamma and Lognormal
-loo_panel_a_white_gamma <- fit_panel_a_white_gamma$loo()
-loo_panel_a_black_gamma <- fit_panel_a_black_gamma$loo()
-loo_panel_b_white_gamma <- fit_panel_b_white_gamma$loo()
-loo_panel_b_black_gamma <- fit_panel_b_black_gamma$loo()
-loo_panel_a_white_lognormal <- fit_panel_a_white_lognormal$loo()
-loo_panel_a_black_lognormal <- fit_panel_a_black_lognormal$loo()
-loo_panel_b_white_lognormal <- fit_panel_b_white_lognormal$loo()
-loo_panel_b_black_lognormal <- fit_panel_b_black_lognormal$loo()
-
-loo::loo_compare(loo_panel_a_white_gamma, loo_panel_a_white_lognormal)
-loo::loo_compare(loo_panel_a_black_gamma, loo_panel_a_black_lognormal)
-loo::loo_compare(loo_panel_b_white_gamma, loo_panel_b_white_lognormal)
-loo::loo_compare(loo_panel_b_black_gamma, loo_panel_b_black_lognormal)
 
