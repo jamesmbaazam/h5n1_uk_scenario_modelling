@@ -103,18 +103,18 @@ res_panel_b_black_lognormal <- tidybayes::spread_draws(
 
 #--- Combining posterior predictive draws
 dt_draws_gamma <- 
-  rbind(res_panel_a_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-        res_panel_a_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-        res_panel_b_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-        res_panel_b_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[
-          , panel := "A"][, Distribution := "Gamma"]
+  rbind(
+    res_panel_a_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
+    res_panel_a_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
+    res_panel_b_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
+    res_panel_b_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Gamma"]
 
 dt_draws_lognormal <- 
-  rbind(res_panel_a_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-        res_panel_a_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-        res_panel_b_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-        res_panel_b_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[
-          , panel := "A"][, Distribution := "Lognormal"]
+  rbind(
+    res_panel_a_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
+    res_panel_a_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
+    res_panel_b_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
+    res_panel_b_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Lognormal"]
 
 dt_draws <- rbind(dt_draws_gamma, dt_draws_lognormal)
 
@@ -126,4 +126,23 @@ dt_draws |>
   lims(x = c(0, 30)) + 
   labs(x = "Time (days)", y = "Probability density") + 
   theme_minimal()
+
+dt_draws[order(`Exposure type`, `Case type`)][Distribution == "Lognormal"][
+  , .(mean = mean(y_rep), median = median(y_rep)), 
+  by = .(`Exposure type`, `Case type`)]
+
+#--- LOO-CV analysis for picking between Gamma and Lognormal
+loo_panel_a_white_gamma <- fit_panel_a_white_gamma$loo()
+loo_panel_a_black_gamma <- fit_panel_a_black_gamma$loo()
+loo_panel_b_white_gamma <- fit_panel_b_white_gamma$loo()
+loo_panel_b_black_gamma <- fit_panel_b_black_gamma$loo()
+loo_panel_a_white_lognormal <- fit_panel_a_white_lognormal$loo()
+loo_panel_a_black_lognormal <- fit_panel_a_black_lognormal$loo()
+loo_panel_b_white_lognormal <- fit_panel_b_white_lognormal$loo()
+loo_panel_b_black_lognormal <- fit_panel_b_black_lognormal$loo()
+
+loo::loo_compare(loo_panel_a_white_gamma, loo_panel_a_white_lognormal)
+loo::loo_compare(loo_panel_a_black_gamma, loo_panel_a_black_lognormal)
+loo::loo_compare(loo_panel_b_white_gamma, loo_panel_b_white_lognormal)
+loo::loo_compare(loo_panel_b_black_gamma, loo_panel_b_black_lognormal)
 

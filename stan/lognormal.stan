@@ -12,7 +12,13 @@ model {
 }
 generated quantities {
   vector[N] y_rep; // Simulated data
+  vector[N] log_lik;
   for (n in 1:N) {
     y_rep[n] = lognormal_rng(mu, sigma); // Draws from the posterior predictive distribution
+  }
+  
+  // Log-likelihood for LOO
+  for (n in 1:N) {
+    log_lik[n] = lognormal_lpdf(y[n] | mu, sigma);
   }
 }
