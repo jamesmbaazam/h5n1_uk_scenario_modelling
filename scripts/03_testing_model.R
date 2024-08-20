@@ -1,27 +1,5 @@
-# Install and load required packages
-if (!require("pak")) install.packages("pak")
-pak::pak(c("epiverse-trace/epichains", "epiverse-trace/epiparameter", "tidyverse", "truncdist", "MASS", "fitdistrplus", "ggplot2", "gridExtra"))
-
-# Load required libraries
-library(tidyverse)
-library(epichains)
-library(truncdist)
-library(epiparameter)
-library(MASS)
-library(fitdistrplus)
-library(ggplot2)
-library(gridExtra)
-
 # Set seed for reproducibility
 set.seed(123)
-
-# Define time-varying sensitivity function
-sensitivity_function <- function(t) {
-  if (t < 0) return(0)
-  if (t <= 2) return(0.475 * t)
-  if (t <= 7) return(0.95 - 0.19 * (t - 2))
-  return(0)
-}
 
 # Define the flight_test_fun function
 flight_test_fun <- function(chain_data, test_before_flight, test_after_flight, pre_flight_test_delay, post_flight_test_delay, flight_time_range, flight_duration) {
@@ -146,9 +124,9 @@ sim_chains <- simulate_chains(
   statistic = "length",
   offspring_dist = rnbinom,
   stat_threshold = 2,
-  generation_time = function(n) rdunif(n, 1, 4),
-  mu = 2.5,
-  size = 0.1
+  generation_time = function(n) rgamma(n, shape = si_shape, scale = si_scale),
+  mu = 2,
+  size = 1
 )
 
 # Convert sim_chains to dataframe
@@ -175,51 +153,3 @@ results_summary <- data.frame(
   R = sapply(results, function(x) x$R),
   k = sapply(results, function(x) x$k)
 )
-
-# Calculate relative risk
-no_intervention_R <- results_summary$R[results_summary$Scenario == "No testing"]
-results_summary$RelativeRisk <- results_summary$R / no_intervention_R
-
-cat("Summary of results:\n")
-print(results_summary)
-
-# Visualise the results
-# Plot R values
-p1 <- ggplot(results_summary, aes(x = Scenario, y = R)) +
-  geom_bar(stat = "identity", fill = "darkgreen") +
-  geom_text(aes(label = sprintf("%.2f", R)), vjust = -0.5) +
-  ylim(0, max(results_summary$R, na.rm = TRUE) * 1.1) +
-  ggtitle("Estimated R for Exported Infections by Testing Scenario") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# Plot k values
-p2 <- ggplot(results_summary, aes(x = Scenario, y = k)) +
-  geom_bar(stat = "identity", fill = "darkred") +
-  geom_text(aes(label = sprintf("%.2f", k)), vjust = -0.5) +
-  ylim(0, max(results_summary$k, na.rm = TRUE) * 1.1) +
-  ggtitle("Estimated k for Exported Infections by Testing Scenario") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# Add a plot to visualise the sensitivity function
-t_values <- seq(0, 7, by = 0.1)
-sensitivity_values <- sapply(t_values, sensitivity_function)
-
-p3 <- ggplot(data.frame(t = t_values, sensitivity = sensitivity_values), aes(x = t, y = sensitivity)) +
-  geom_line() +
-  labs(title = "Time-varying Test Sensitivity", x = "Days since infection", y = "Test Sensitivity") +
-  theme_minimal()
-
-# Plot Relative Risk
-p4 <- ggplot(results_summary, aes(x = Scenario, y = RelativeRisk)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  geom_text(aes(label = sprintf("%.2f", RelativeRisk)), vjust = -0.5) +
-  ylim(0, max(results_summary$RelativeRisk, na.rm = TRUE) * 1.1) +
-  ggtitle("Relative Risk of Exported Infections by Testing Scenario") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "red")
-
-# Arrange plots
-grid.arrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
