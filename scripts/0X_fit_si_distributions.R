@@ -3,36 +3,42 @@ library(cmdstanr)
 library(ggplot2)
 library(tidybayes)
 
+#--- Loading in data
 dt_panel_a <- fread("data/si_raw_data/panel_a.csv")
 dt_panel_b <- fread("data/si_raw_data/panel_b.csv")
 
-# Create vectors of intervals for both groups
+#-- Creating vectors of intervals for both groups
 panel_a_intervals_white <- rep(dt_panel_a$days, dt_panel_a$cases_white)
 panel_a_intervals_black <- rep(dt_panel_a$days, dt_panel_a$cases_black)
 panel_b_intervals_white <- rep(dt_panel_b$days, dt_panel_b$cases_white)
 panel_b_intervals_black <- rep(dt_panel_b$days, dt_panel_b$cases_black)
 
+#--- Putting data into format for Stan
 stan_data_panel_a_white <- list(
   N = length(panel_a_intervals_white),
+  N_rep = 1000,
   y = panel_a_intervals_white
 )
 
 stan_data_panel_a_black <- list(
   N = length(panel_a_intervals_black),
+  N_rep = 1000,
   y = panel_a_intervals_black
 )
 
 stan_data_panel_b_white <- list(
   N = length(panel_b_intervals_white),
+  N_rep = 1000,
   y = panel_b_intervals_white
 )
 
 stan_data_panel_b_black <- list(
   N = length(panel_b_intervals_black),
+  N_rep = 1000,
   y = panel_b_intervals_black
 )
 
-# For the Gamma distribution
+#--- Compiling Stan models
 mod_gamma <- cmdstan_model(stan_file = "stan/gamma.stan")
 mod_lognormal <- cmdstan_model(stan_file = "stan/lognormal.stan")
 
@@ -66,11 +72,11 @@ fit_panel_b_white_lognormal <- mod_lognormal$sample(
   data = stan_data_panel_b_white, chains = 4, 
   iter_warmup = 1000, iter_sampling = 2000)
 
-fit_panel_b_black_lognormal<- mod_lognormal$sample(
+fit_panel_b_black_lognormal <- mod_lognormal$sample(
   data = stan_data_panel_b_black, chains = 4, 
   iter_warmup = 1000, iter_sampling = 2000)
 
-#--- Extracting posterior predictive draws
+#--- Extracting posterior predictive draws using tidybayes
 res_panel_a_white_gamma <- tidybayes::spread_draws(
   fit_panel_a_white_gamma, y_rep[i]) |> data.table()
 
@@ -95,6 +101,7 @@ res_panel_b_white_lognormal <- tidybayes::spread_draws(
 res_panel_b_black_lognormal <- tidybayes::spread_draws(
   fit_panel_b_black_lognormal, y_rep[i]) |> data.table()
 
+#--- Combining posterior predictive draws
 dt_draws_gamma <- 
   rbind(res_panel_a_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
         res_panel_a_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
@@ -111,6 +118,7 @@ dt_draws_lognormal <-
 
 dt_draws <- rbind(dt_draws_gamma, dt_draws_lognormal)
 
+#--- Plotting
 dt_draws |> 
   ggplot() + 
   geom_density(aes(x = y_rep, fill = `Distribution`), alpha = 0.2) +
