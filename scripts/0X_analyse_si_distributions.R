@@ -1,6 +1,7 @@
+library(data.table)
 library(ggplot2)
-library(tidybayes)
 library(loo)
+library(tidybayes)
 
 #--- Loading fits
 fit_panel_a_white_gamma <- readRDS("fits/fit_panel_a_white_gamma.rds")
@@ -13,29 +14,37 @@ fit_panel_b_white_lognormal <- readRDS("fits/fit_panel_b_white_lognormal.rds")
 fit_panel_b_black_lognormal <- readRDS("fits/fit_panel_b_black_lognormal.rds")
 
 #--- Extracting posterior predictive draws using tidybayes
-res_panel_a_white_gamma <- tidybayes::spread_draws(
-  fit_panel_a_white_gamma, y_rep[i]) |> data.table()
+res_panel_a_white_gamma <- spread_draws(
+  fit_panel_a_white_gamma, y_rep[i]) |>
+  data.table()
 
-res_panel_a_black_gamma <- tidybayes::spread_draws(
-  fit_panel_a_black_gamma, y_rep[i]) |> data.table()
+res_panel_a_black_gamma <- spread_draws(
+  fit_panel_a_black_gamma, y_rep[i]) |>
+  data.table()
 
-res_panel_b_white_gamma <- tidybayes::spread_draws(
-  fit_panel_b_white_gamma, y_rep[i]) |> data.table()
+res_panel_b_white_gamma <- spread_draws(
+  fit_panel_b_white_gamma, y_rep[i]) |>
+  data.table()
 
-res_panel_b_black_gamma <- tidybayes::spread_draws(
-  fit_panel_b_black_gamma, y_rep[i]) |> data.table()
+res_panel_b_black_gamma <- spread_draws(
+  fit_panel_b_black_gamma, y_rep[i]) |>
+  data.table()
 
-res_panel_a_white_lognormal <- tidybayes::spread_draws(
-  fit_panel_a_white_lognormal, y_rep[i]) |> data.table()
+res_panel_a_white_lognormal <- spread_draws(
+  fit_panel_a_white_lognormal, y_rep[i]) |>
+  data.table()
 
-res_panel_a_black_lognormal <- tidybayes::spread_draws(
-  fit_panel_a_black_lognormal, y_rep[i]) |> data.table()
+res_panel_a_black_lognormal <- spread_draws(
+  fit_panel_a_black_lognormal, y_rep[i]) |>
+  data.table()
 
-res_panel_b_white_lognormal <- tidybayes::spread_draws(
-  fit_panel_b_white_lognormal, y_rep[i]) |> data.table()
+res_panel_b_white_lognormal <- spread_draws(
+  fit_panel_b_white_lognormal, y_rep[i]) |>
+  data.table()
 
-res_panel_b_black_lognormal <- tidybayes::spread_draws(
-  fit_panel_b_black_lognormal, y_rep[i]) |> data.table()
+res_panel_b_black_lognormal <- spread_draws(
+  fit_panel_b_black_lognormal, y_rep[i]) |> 
+  data.table()
 
 #--- Combining posterior predictive draws
 dt_draws_gamma <- 
@@ -79,8 +88,13 @@ loo_panel_b_white_lognormal <- fit_panel_b_white_lognormal$loo()
 loo_panel_b_black_lognormal <- fit_panel_b_black_lognormal$loo()
 
 # Comparing LOO estimates
-print(loo_compare(loo_panel_a_white_gamma, loo_panel_a_white_lognormal), simplify = FALSE)
-print(loo_compare(loo_panel_a_black_gamma, loo_panel_a_black_lognormal), simplify = FALSE)
-print(loo_compare(loo_panel_b_white_gamma, loo_panel_b_white_lognormal), simplify = FALSE)
-print(loo_compare(loo_panel_b_black_gamma, loo_panel_b_black_lognormal), simplify = FALSE)
+print(loo_compare(
+  loo_panel_a_white_gamma, loo_panel_a_white_lognormal, 
+  loo_panel_b_white_gamma, loo_panel_b_white_lognormal),
+  simplify = FALSE)
+
+print(loo_compare(
+  loo_panel_a_black_gamma, loo_panel_a_black_lognormal, 
+  loo_panel_b_black_gamma, loo_panel_b_black_lognormal),
+  simplify = FALSE)
 
