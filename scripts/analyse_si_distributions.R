@@ -13,7 +13,7 @@ dt_draws[, `:=` (
   `Lower CrI` = quantile(y_rep, 0.025),
   `Upper CrI` = quantile(y_rep, 0.975)),
   by = .(`Exposure Type`, `Case Source`, `Distribution Type`)][
-  , `Case Source` := fct_relevel(`Case Source`, c("Serial", "Index"))]
+  , `Case Source` := fct_relevel(`Case Source`, c("Index", "Serial"))]
 
 #--- Printing summary table
 dt_draws[order(`Exposure Type`, `Case Source`, `Distribution Type`)
