@@ -2,79 +2,42 @@ library(data.table)
 library(ggplot2)
 library(loo)
 library(tidybayes)
+library(forcats)
 
-#--- Loading fits
-fit_panel_a_white_gamma <- readRDS("fits/fit_panel_a_white_gamma.rds")
-fit_panel_a_black_gamma <- readRDS("fits/fit_panel_a_black_gamma.rds")
-fit_panel_b_white_gamma <- readRDS("fits/fit_panel_b_white_gamma.rds")
-fit_panel_b_black_gamma <- readRDS("fits/fit_panel_b_black_gamma.rds")
-fit_panel_a_white_lognormal <- readRDS("fits/fit_panel_a_white_lognormal.rds")
-fit_panel_a_black_lognormal <- readRDS("fits/fit_panel_a_black_lognormal.rds")
-fit_panel_b_white_lognormal <- readRDS("fits/fit_panel_b_white_lognormal.rds")
-fit_panel_b_black_lognormal <- readRDS("fits/fit_panel_b_black_lognormal.rds")
+dt_draws <- readRDS("posterior_predictive/dt_draws.rds")
 
-#--- Extracting posterior predictive draws using tidybayes
-res_panel_a_white_gamma <- spread_draws(
-  fit_panel_a_white_gamma, y_rep[i]) |>
-  data.table()
+#--- Adding mean, median and 95% credible intervals to data.table
+dt_draws[, `:=` (
+  Mean = mean(y_rep),
+  Median = quantile(y_rep, 0.5),
+  `Lower CrI` = quantile(y_rep, 0.025),
+  `Upper CrI` = quantile(y_rep, 0.975)),
+  by = .(`Exposure Type`, `Case Source`, `Distribution Type`)][
+  , `Case Source` := fct_relevel(`Case Source`, c("Serial", "Index"))]
 
-res_panel_a_black_gamma <- spread_draws(
-  fit_panel_a_black_gamma, y_rep[i]) |>
-  data.table()
-
-res_panel_b_white_gamma <- spread_draws(
-  fit_panel_b_white_gamma, y_rep[i]) |>
-  data.table()
-
-res_panel_b_black_gamma <- spread_draws(
-  fit_panel_b_black_gamma, y_rep[i]) |>
-  data.table()
-
-res_panel_a_white_lognormal <- spread_draws(
-  fit_panel_a_white_lognormal, y_rep[i]) |>
-  data.table()
-
-res_panel_a_black_lognormal <- spread_draws(
-  fit_panel_a_black_lognormal, y_rep[i]) |>
-  data.table()
-
-res_panel_b_white_lognormal <- spread_draws(
-  fit_panel_b_white_lognormal, y_rep[i]) |>
-  data.table()
-
-res_panel_b_black_lognormal <- spread_draws(
-  fit_panel_b_black_lognormal, y_rep[i]) |> 
-  data.table()
-
-#--- Combining posterior predictive draws
-dt_draws_gamma <- 
-  rbind(
-    res_panel_a_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_a_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_b_white_gamma[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-    res_panel_b_black_gamma[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Gamma"]
-
-dt_draws_lognormal <- 
-  rbind(
-    res_panel_a_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_a_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Index to serial (Panel A)"],
-    res_panel_b_white_lognormal[, `Exposure type` := "Non-zoonotic"][, `Case type` := "Serial (Panel B)"],
-    res_panel_b_black_lognormal[, `Exposure type` := "Zoonotic"][, `Case type` := "Serial (Panel B)"])[, Distribution := "Lognormal"]
-
-dt_draws <- rbind(dt_draws_gamma, dt_draws_lognormal)
+#--- Printing summary table
+dt_draws[order(`Exposure Type`, `Case Source`, `Distribution Type`)
+  , .(Mean, Median, `Lower CrI`, `Upper CrI`),
+  by = .(`Exposure Type`, `Case Source`, `Distribution Type`)] |>
+  unique()
 
 #--- Plotting
 dt_draws |> 
   ggplot() + 
-  geom_density(aes(x = y_rep, fill = `Distribution`), alpha = 0.2) +
-  facet_grid(`Case type` ~ `Exposure type`) + 
+  geom_density(
+    aes(x = y_rep,
+        fill = interaction(`Exposure Type`, `Distribution Type`, `Case Source`)),
+    alpha = 0.5) +
+  geom_vline(aes(
+    xintercept = Median, 
+    colour = interaction(`Exposure Type`, `Distribution Type`, `Case Source`)),
+    linetype = "dashed") +
+  facet_grid(`Distribution Type` ~ `Exposure Type` + `Case Source`) +
   lims(x = c(0, 30)) + 
-  labs(x = "Time (days)", y = "Probability density") + 
-  theme_minimal()
-
-dt_draws[order(`Exposure type`, `Case type`)][Distribution == "Lognormal"][
-  , .(mean = mean(y_rep), median = median(y_rep)), 
-  by = .(`Exposure type`, `Case type`)]
+  labs(
+    x = "Time (days)", y = "Probability density") + 
+  theme_minimal() +
+  theme(legend.position = "none")
 
 #--- LOO-CV analysis for picking between Gamma and Lognormal
 # Calculating LOO estimates
