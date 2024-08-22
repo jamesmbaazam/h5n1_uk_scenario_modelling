@@ -124,7 +124,7 @@ sim_chains <- simulate_chains(
   statistic = "length",
   offspring_dist = rnbinom,
   stat_threshold = 2,
-  generation_time = function(n) rgamma(n, shape = si_shape, scale = si_scale),
+  generation_time = function(n) sample(si_draws$y_rep, n, replace = TRUE),
   mu = 2,
   size = 1
 )
