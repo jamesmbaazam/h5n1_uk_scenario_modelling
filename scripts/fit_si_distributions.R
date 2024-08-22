@@ -1,85 +1,49 @@
 library(data.table)
 library(cmdstanr)
+library(tidybayes)
+
+#--- Source the helper functions
+source("R/utils.R")
 
 #--- Loading in data
-dt_panel_a <- fread("data/si_raw_data/panel_a.csv")
-dt_panel_b <- fread("data/si_raw_data/panel_b.csv")
+data_files <- list(
+  "index" = "data/si_raw_data/index.csv",
+  "serial" = "data/si_raw_data/serial.csv"
+)
 
-#-- Creating vectors of intervals for both groups
-panel_a_intervals_white <- rep(dt_panel_a$days, dt_panel_a$cases_white)
-panel_a_intervals_black <- rep(dt_panel_a$days, dt_panel_a$cases_black)
-panel_b_intervals_white <- rep(dt_panel_b$days, dt_panel_b$cases_white)
-panel_b_intervals_black <- rep(dt_panel_b$days, dt_panel_b$cases_black)
+data_tables <- lapply(data_files, fread)
+
+#-- Creating vectors of intervals
+intervals <- lapply(data_tables, create_intervals)
 
 #--- Putting data into format for Stan
-stan_data_panel_a_white <- list(
-  N = length(panel_a_intervals_white),
-  N_rep = 1000,
-  y = panel_a_intervals_white
-)
-
-stan_data_panel_a_black <- list(
-  N = length(panel_a_intervals_black),
-  N_rep = 1000,
-  y = panel_a_intervals_black
-)
-
-stan_data_panel_b_white <- list(
-  N = length(panel_b_intervals_white),
-  N_rep = 1000,
-  y = panel_b_intervals_white
-)
-
-stan_data_panel_b_black <- list(
-  N = length(panel_b_intervals_black),
-  N_rep = 1000,
-  y = panel_b_intervals_black
-)
+stan_data <- lapply(intervals, create_stan_data)
 
 #--- Compiling Stan models
-mod_gamma <- cmdstan_model(stan_file = "stan/gamma.stan")
-mod_lognormal <- cmdstan_model(stan_file = "stan/lognormal.stan")
+models <- list(
+  gamma = cmdstan_model(stan_file = "stan/gamma.stan"),
+  lognormal = cmdstan_model(stan_file = "stan/lognormal.stan")
+)
 
-#--- Fitting Gamma distributions
-fit_panel_a_white_gamma <- mod_gamma$sample(
-  data = stan_data_panel_a_white, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
+#--- Fitting models
+fit_results <- list(
+  gamma = lapply(stan_data, fit_models, model = models$gamma),
+  lognormal = lapply(stan_data, fit_models, model = models$lognormal)
+)
 
-fit_panel_a_black_gamma <- mod_gamma$sample(
-  data = stan_data_panel_a_black, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
+#--- Extracting posterior predictive draws using tidybayes
+posterior_draws <- list(
+  gamma = lapply(fit_results$gamma, function(panel_fits) lapply(panel_fits, extract_draws)),
+  lognormal = lapply(fit_results$lognormal, function(panel_fits) lapply(panel_fits, extract_draws))
+)
 
-fit_panel_b_white_gamma <- mod_gamma$sample(
-  data = stan_data_panel_b_white, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
+#--- Combining posterior predictive draws
+dt_draws <- rbind(
+  combine_draws("index", posterior_draws, "gamma"),
+  combine_draws("serial", posterior_draws, "gamma"),
+  combine_draws("index", posterior_draws, "lognormal"),
+  combine_draws("serial", posterior_draws, "lognormal")
+)
 
-fit_panel_b_black_gamma <- mod_gamma$sample(
-  data = stan_data_panel_b_black, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
-
-#--- Fitting Lognormal distributions
-fit_panel_a_white_lognormal <- mod_lognormal$sample(
-  data = stan_data_panel_a_white, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
-
-fit_panel_a_black_lognormal <- mod_lognormal$sample(
-  data = stan_data_panel_a_black, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
-
-fit_panel_b_white_lognormal <- mod_lognormal$sample(
-  data = stan_data_panel_b_white, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
-
-fit_panel_b_black_lognormal <- mod_lognormal$sample(
-  data = stan_data_panel_b_black, chains = 4, 
-  iter_warmup = 1000, iter_sampling = 2000)
-
-#--- Saving fits
-saveRDS(fit_panel_a_white_gamma, "fits/fit_panel_a_white_gamma.rds")
-saveRDS(fit_panel_a_black_gamma, "fits/fit_panel_a_black_gamma.rds")
-saveRDS(fit_panel_b_white_gamma, "fits/fit_panel_b_white_gamma.rds")
-saveRDS(fit_panel_b_black_gamma, "fits/fit_panel_b_black_gamma.rds")
-saveRDS(fit_panel_a_white_lognormal, "fits/fit_panel_a_white_lognormal.rds")
-saveRDS(fit_panel_a_black_lognormal, "fits/fit_panel_a_black_lognormal.rds")
-saveRDS(fit_panel_b_white_lognormal, "fits/fit_panel_b_white_lognormal.rds")
-saveRDS(fit_panel_b_black_lognormal, "fits/fit_panel_b_black_lognormal.rds")
+#--- Saving combined draws
+saveRDS(dt_draws, "posterior_predictive/dt_draws.rds")
