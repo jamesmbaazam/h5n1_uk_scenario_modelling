@@ -47,3 +47,30 @@ dt_draws <- rbind(
 
 #--- Saving combined draws
 saveRDS(dt_draws, "posterior_predictive/dt_draws.rds")
+
+#---  LOO-CV analysis for picking between Gamma and Lognormal
+# Create a named list to store the LOO estimates, extracting them from the nested structure
+loo_results <- list(
+  gamma_index_non_zoonotic = fit_results$gamma$index$nonzoonotic$loo(),
+  gamma_index_zoonotic = fit_results$gamma$index$zoonotic$loo(),
+  gamma_serial_non_zoonotic = fit_results$gamma$serial$nonzoonotic$loo(),
+  gamma_serial_zoonotic = fit_results$gamma$serial$zoonotic$loo(),
+  lognormal_index_non_zoonotic = fit_results$lognormal$index$nonzoonotic$loo(),
+  lognormal_index_zoonotic = fit_results$lognormal$index$zoonotic$loo(),
+  lognormal_serial_non_zoonotic = fit_results$lognormal$serial$nonzoonotic$loo(),
+  lognormal_serial_zoonotic = fit_results$lognormal$serial$zoonotic$loo()
+)
+
+print(loo_compare(
+  loo_results$gamma_index_non_zoonotic,
+  loo_results$lognormal_index_non_zoonotic,
+  loo_results$gamma_serial_non_zoonotic,
+  loo_results$lognormal_serial_non_zoonotic
+), simplify = FALSE)
+
+print(loo_compare(
+  loo_results$gamma_index_zoonotic,
+  loo_results$lognormal_index_zoonotic,
+  loo_results$gamma_serial_zoonotic,
+  loo_results$lognormal_serial_zoonotic
+), simplify = FALSE)
