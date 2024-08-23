@@ -1,78 +1,24 @@
 ---
-title: Branching process H5N1 outbreak scenarios
+title: H5N1 outbreak scenarios
 ---
 
 This report requires two R packages: {epichains} and {ggplot2}, the former to simulate the branching process model and the latter to visualise the results.
 
 ```{r}
+# install from outbreak_dist branch of {epichains}
+# remotes::install_github("epiverse-trace/epichains@outbreak_dist")
 library(epichains)
 library(ggplot2)
 ```
 
-Add a function that calculates the proportion of outbreak statistic across values of the reproduction number ($R$).
+The `simulate_scenarios()` function from {epichains} calculates the proportion of outbreak statistic across values of the reproduction number ($R$).
 
-```{r}
-#| code-fold: true
-#| code-summary: "Show the function"
-outbreak_statistic <- function(offspring_dist, 
-                               statistic, 
-                               R_seq, 
-                               k_seq, 
-                               breaks, 
-                               ...) {
-  scenarios <- expand.grid(
-    offspring_dist = offspring_dist, 
-    statistic = statistic, 
-    R = R_seq, 
-    k = k_seq, 
-    stringsAsFactors = FALSE
-  )
-  
-  # remove any variation in k for rpois as parameter not used
-  if ("rpois" %in% offspring_dist && length(unique(scenarios$k) > 1)) {
-    drop_rows <- c(
-      scenarios$offspring_dist == "rpois" & 
-        scenarios$k != unique(scenarios$k)[1]
-    )
-    scenarios <- scenarios[!drop_rows, ]
-    # convert rpois k to NA to make clear it isn't used
-    scenarios$k[scenarios$offspring_dist == "rpois"] <- NA_real_
-  }
-  
-  df_list <- vector(mode = "list", length = nrow(scenarios))
-  for (i in seq_len(nrow(scenarios))) {
-    args <- list(
-      n_chains = 1000, 
-      offspring_dist = match.fun(scenarios[i, "offspring_dist"]), 
-      statistic = scenarios[i, "statistic"]
-    )
-    if (scenarios[i, "offspring_dist"] == "rpois") {
-      args$lambda <- scenarios[i, "R"]
-    } else {
-      args_ <- list(mu = scenarios[i, "R"], size = scenarios[i, "k"])
-      args <- c(args, args_)
-    }
-    x <- do.call(epichains::simulate_chain_stats, args = args)
-    interval <- cut(x, breaks = breaks)
-    prop <- table(interval) / sum(table(interval))
-    df_ <- as.data.frame(prop)
-    df_$R <- scenarios[i, "R"]
-    df_$k <- scenarios[i, "k"]
-    df_$offspring_dist <- scenarios[i, "offspring_dist"]
-    df_$statistic <- scenarios[i, "statistic"]
-    df_list[[i]] <- df_
-  }
-  df <- do.call(rbind, df_list)
-  return(df)
-}
-```
-
-Run the function for both Poisson (`"rpois"`) and Negative Binomial (`"rnbinom"`) distributions, calculating both the size and length of the outbreak. Size is the total number of cases produced by a chain before it goes extinct. Length is the total number of generations reached by a chain before it goes extinct. See `?epichains::simulate_chain_stats` for more information on the branching process simulation.
+Here we run the function for both Poisson (`"rpois"`) and Negative Binomial (`"rnbinom"`) distributions, calculating both the size and length of the outbreak. Size is the total number of cases produced by a chain before it goes extinct. Length is the total number of generations reached by a chain before it goes extinct. See `?epichains::simulate_chain_stats` for more information on the branching process simulation.
 
 We simulate using a reproduction number ($R$) between 0.1 and 0.9 at 0.1 intervals, and for the Negative Binomial offspring distribution we vary the dispersion parameter ($k$) between 0.5 and 2.5 at 0.5 intervals. Smaller values of $k$ signify more overdispersion in the transmission spreading, in other words transmission is more heterogeneous and superspreding events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
 
 ```{r}
-df <- outbreak_statistic(
+df <- simulate_scenarios(
   offspring_dist = c("rpois", "rnbinom"), 
   statistic = c("size", "length"), 
   R_seq = seq(0, 0.9, 0.1), 
@@ -92,6 +38,8 @@ head(df)
 Plotting the Poisson results.
 
 ```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
 df |> 
   subset(offspring_dist == "rpois") |>
   ggplot2::ggplot() +
@@ -115,6 +63,8 @@ df |>
 Plotting the Negative Binomial results for $k = 0.5$.
 
 ```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
 df |> 
   subset(offspring_dist == "rnbinom" & k == 0.5) |>
   ggplot2::ggplot() +
@@ -138,6 +88,8 @@ df |>
 Plotting the outbreak size distribution for the Negative Binomial results faceting for values of $k$.
 
 ```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
 df |> 
   subset(offspring_dist == "rnbinom" & statistic == "size") |>
   ggplot2::ggplot() +
@@ -161,6 +113,8 @@ df |>
 Plotting the outbreak length distribution for the Negative Binomial results faceting for values of $k$.
 
 ```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
 df |> 
   subset(offspring_dist == "rnbinom" & statistic == "length") |>
   ggplot2::ggplot() +
