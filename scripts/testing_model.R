@@ -145,11 +145,7 @@ run_scenario <- function(sim_chains_df, test_before_flight, test_after_flight, p
     flight_duration = flight_duration
   )
   
-  r_k <- calculate_r_and_k(filtered_results)
-  
-  return(list(filtered_results = filtered_results, 
-              R = r_k$R,
-              k = r_k$k))
+  return(filtered_results)
 }
 
 # Define scenarios
@@ -162,120 +158,63 @@ scenarios <- list(
 
 # Create a data frame with all combinations of R values and size parameters
 simulation_params <- expand_grid(
-  R = 2,#seq(0.5, 2, by = 0.1),
-  size = 100#c(0.1, 1, 10, 100)
+  R = 1,
+  size = 0.1
 )
 
 run_simulation <- function(R, size) {
-  sim_chains <- simulate_chains(
-    n_chains = 300,
-    statistic = "size",
-    offspring_dist = function(n, mu) rnbinom(n, mu = mu, size = size),
-    stat_threshold = 10000,
-    generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
-    mu = R
-  )
-  
-  sim_chains_df <- as.data.frame(sim_chains)
-  
-  results <- map(scenarios, ~run_scenario(sim_chains_df, .$pre, .$post, .$pre_delay, .$post_delay, .$flight_duration, .$name))
-  
-  results_summary <- tibble(
-    Scenario = map_chr(scenarios, "name"),
-    results_R = map_dbl(results, "R"),
-    results_k = map_dbl(results, "k"),
-    Input_R = R,
-    Input_Size = size
-  )
-  
-  chains <- tibble(chains = map(results, "filtered_results"),
-                   Scenario = map_chr(scenarios, "name"))
-
-  return(list("results_summary" = results_summary,
-              "chains" = chains))
+  results <- map(1:100, function(i) {
+    sim_chains <- simulate_chains(
+      n_chains = 100,
+      statistic = "length",
+      offspring_dist = function(n, mu) rnbinom(n, mu = mu, size = size),
+      stat_threshold = 15,
+      generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
+      mu = R
+    )
+    
+    sim_chains_df <- as.data.frame(sim_chains)
+    
+    map(scenarios, ~list(
+      scenario = .$name,
+      chains = run_scenario(sim_chains_df, .$pre, .$post, .$pre_delay, .$post_delay, .$flight_duration, .$name)
+    ))
+  })
 }
 
 # Run simulations for all combinations of R and size
 all_results <- simulation_params %>%
   mutate(results = map2(R, size, run_simulation)) %>%
-  unnest_wider(results)
+  unnest(results)
 
-# plot chains 
-plot_chains <- function(chains, Scenario) {
-#browser()
+# Function to process chains and calculate daily cases
+process_chains <- function(chains, scenario) {
   chains %>%
-    #aggregate by day
     mutate(time = floor(time)) %>%
     filter(time > flight_time) %>%
     group_by(time) %>% 
     count() %>%
-    ggplot(aes(x = time, y = n)) +
-          geom_point() +
-          geom_line() +
-          xlab("Time") +
-          ylab("Cases") +
-    #name chains by scenario
-          ggtitle(Scenario) +
-          theme_minimal() +
-          theme(legend.position = "bottom")
+    mutate(Scenario = scenario)
 }
 
-# plot them all together
-all_results %>% 
-  unnest(chains) %>% 
-  mutate(plot = map2(chains, Scenario,  plot_chains)) %>% 
-  pull(plot) %>% 
-  wrap_plots()&
-  coord_cartesian(xlim = c(0, 100))&
-  scale_y_continuous(limits = c(0, 10000))
-  
-# 
-# # Create plots
-# create_plot_R <- function(data) {
-#   ggplot(data, aes(x = Input_R, y = results_R, color = Scenario, group = Scenario)) +
-#     geom_point() +
-#     geom_line() +
-#     facet_wrap(~ Input_Size, scales = "free_y", 
-#                labeller = labeller(Input_Size = function(x) paste("Size =", x))) +
-#     xlab("Input R") +
-#     ylab("Estimated R") +
-#     ggtitle("Estimated R for Different Testing Scenarios") +
-#     theme_minimal() +
-#     theme(legend.position = "bottom") +
-#     geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black")
-# }
-# 
-# create_plot_k <- function(data) {
-#   ggplot(data, aes(x = Input_R, y = results_k, color = Scenario, group = Scenario)) +
-#     geom_point() +
-#     geom_line() +
-#     facet_wrap(~ Input_Size, scales = "free_y", 
-#                labeller = labeller(Input_Size = function(x) paste("Size =", x))) +
-#     xlab("Input R") +
-#     ylab("Estimated k") +
-#     ggtitle("Estimated k for Different Testing Scenarios") +
-#     theme_minimal() +
-#     theme(legend.position = "bottom") +
-#     geom_hline(aes(yintercept = Input_Size), linetype = "dashed", color = "black")
-# }
-# 
-# # Generate plots
-# plot_R <- create_plot_R(all_results)
-# plot_k <- create_plot_k(all_results)
-# 
-# # Display plots
-# print(plot_R)
-# print(plot_k)
-# 
-# # Add a plot to visualise the sensitivity function
-# t_values <- seq(0, 7, by = 0.1)
-# sensitivity_values <- map_dbl(t_values, sensitivity_function)
-# 
-# p_sensitivity <- tibble(t = t_values, sensitivity = sensitivity_values) %>%
-#   ggplot(aes(x = t, y = sensitivity)) +
-#   geom_line() +
-#   labs(title = "Time-varying Test Sensitivity", x = "Days since infection", y = "Test Sensitivity") +
-#   theme_minimal()
-# 
-# # Display the sensitivity function plot
-# print(p_sensitivity)
+# Process all chains
+processed_chains <- all_results %>% 
+  unnest(results) %>% 
+  mutate(sim = row_number()) %>% 
+  unnest_wider(results) %>%
+  mutate(processed = map2(chains, scenario, process_chains)) %>%
+  unnest(processed)
+
+# Plot all simulations for each scenario
+plot_all_simulations <- function(data) {
+  ggplot(data, aes(x = time, y = n, group = interaction(Scenario, sim))) +
+    geom_line(alpha = 0.1) +
+    facet_wrap(~Scenario, scales = "free_y") +
+    labs(x = "Time", y = "Daily Cases", title = "Daily Cases for 100 Simulations per Scenario") +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Generate and display the plot
+p <- plot_all_simulations(processed_chains)
+print(p)
