@@ -22,7 +22,7 @@ si_shape <- si_mean^2 / si_sd^2
 si_scale <- si_sd^2 / si_mean
 
 #Plot the serial interval distribution
-si_dist <- rgamma(10000, shape = si_shape, scale = si_scale)
+#si_dist <- rgamma(10000, shape = si_shape, scale = si_scale)
 hist(si_dist, breaks = 50, main = "Serial interval distribution", xlab = "Days", freq = FALSE)
 
 #Aditama et al. 2012 Non-zoonotic serial interval distribution (lognormal)
