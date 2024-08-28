@@ -6,6 +6,8 @@ library(fitdistrplus)
 # Set seed for reproducibility
 set.seed(123)
 
+tmax = 1000
+
 #' Calculate proportion of runs that have controlled outbreak
 #'
 #' @author Joel Hellewell
@@ -189,21 +191,24 @@ all_results <- simulation_params %>%
 
 # Function to process chains and calculate daily cases
 process_chains <- function(chains, scenario) {
+#browser()
   chains %>%
     mutate(time = floor(time)) %>%
     filter(time > flight_time) %>%
-    group_by(time) %>% 
-    count() %>%
-    mutate(Scenario = scenario)
+    group_by(time, .drop = FALSE) %>% 
+    count() %>% 
+    ungroup() %>% 
+    complete(time = 1:tmax, fill = list(n = 0)) %>% 
+    mutate(Scenario = scenario) 
 }
 
 # Process all chains
 processed_chains <- all_results %>% 
-  unnest(results) %>% 
   mutate(sim = row_number()) %>% 
+  unnest(results) %>% 
   unnest_wider(results) %>%
   mutate(processed = map2(chains, scenario, process_chains)) %>%
-  unnest(processed)
+  unnest(processed) 
 
 # Plot all simulations for each scenario
 plot_all_simulations <- function(data) {
@@ -216,5 +221,37 @@ plot_all_simulations <- function(data) {
 }
 
 # Generate and display the plot
-p <- plot_all_simulations(processed_chains)
-print(p)
+plot_all_simulations(processed_chains)
+
+# Function to calculate the proportion of extinct simulations per day
+calculate_extinct_proportion <- function(data) {
+  
+  data %>%
+    group_by(Scenario, time) %>%
+    summarise(
+      total_sims = 100,
+      extinct_sims = sum(n == 0),
+      proportion_extinct = extinct_sims / total_sims,
+      .groups = "drop"
+    )
+}
+
+# Calculate the proportion of extinct simulations
+extinct_proportions <- processed_chains %>%
+  calculate_extinct_proportion()
+
+# Plot the proportion of extinct simulations
+plot_extinct_proportions <- function(data) {
+  ggplot(data, aes(x = time, y = proportion_extinct, color = Scenario)) +
+    geom_line() +
+    facet_wrap(~Scenario) +
+    labs(x = "Time", y = "Proportion of Extinct Simulations", 
+         title = "Proportion of Extinct Simulations Over Time") +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    ylim(0, 1)
+}
+
+# Generate and display the extinction plot
+p_extinct <- plot_extinct_proportions(extinct_proportions)
+print(p_extinct)
