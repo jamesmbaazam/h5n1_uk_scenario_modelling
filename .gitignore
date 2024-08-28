@@ -51,3 +51,34 @@ rsconnect/
 # Stan executables
 stan/gamma
 stan/lognormal
+
+# Ignore Quarto cache and auxiliary files
+.quarto/
+.quarto-cache/
+.quarto-render/
+*.log
+*.aux
+*.out
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.woff
+*.css
+*.js
+
+# Intermediate and temporary files
+*.tmp
+*.knit.md
+
+# LaTeX auxiliary files
+*.lof
+*.lot
+*.lol
+*.nav
+*.snm
+*.vrb
+*.xdv
+*.run.xml
