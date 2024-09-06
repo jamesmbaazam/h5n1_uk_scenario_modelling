@@ -4,18 +4,20 @@ title: H5N1 outbreak scenarios
 
 This report requires two R packages: {epichains} and {ggplot2}, the former to simulate the branching process model and the latter to visualise the results.
 
-```{r}
+```{r echo=FALSE}
 # install from outbreak_dist branch of {epichains}
 # remotes::install_github("epiverse-trace/epichains@outbreak_dist")
 library(epichains)
 library(ggplot2)
 ```
 
-The `simulate_scenarios()` function from {epichains} calculates the proportion of outbreak statistic across values of the reproduction number ($R$).
+The `simulate_scenarios()` function from {epichains} calculates the proportion of outbreak statistic (size and/or length) across scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions.
 
-Here we run the function for both Poisson (`"rpois"`) and Negative Binomial (`"rnbinom"`) distributions, calculating both the size and length of the outbreak. Size is the total number of cases produced by a chain before it goes extinct. Length is the total number of generations reached by a chain before it goes extinct. See `?epichains::simulate_chain_stats` for more information on the branching process simulation.
+Here, we use a simple branching process to explore scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions and their associated chain size and length. The branching process is seeded with an initial number of cases and an offspring distribution, and optionally, a generation time distribution.
 
-We simulate using a reproduction number ($R$) between 0.1 and 0.9 at 0.1 intervals, and for the Negative Binomial offspring distribution we vary the dispersion parameter ($k$) between 0.5 and 2.5 at 0.5 intervals. Smaller values of $k$ signify more overdispersion in the transmission spreading, in other words transmission is more heterogeneous and superspreding events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
+We define the chain size as the total number of cases produced by a chain before it goes extinct. The chain length, on the other hand, is the total number of generations reached by a chain before it goes extinct.
+
+We use a reproduction number ($R$) between 0.1 and 0.9 at 0.1 intervals, and for the Negative Binomial offspring distribution, we vary the dispersion parameter ($k$) between 0.5 and 2.5 at 0.5 intervals. Smaller values of $k$ signify more overdispersion in the individual-level transmissibility, in other words transmission is more heterogeneous and superspreading events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
 
 ```{r}
 df <- simulate_scenarios(
@@ -35,7 +37,7 @@ Here are the first 6 rows.
 head(df)
 ```
 
-Plotting the Poisson results.
+Below, we show the results for the Poisson distribution for varying plausible $R0$ values. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
 
 ```{r}
 #| code-fold: true
@@ -60,7 +62,7 @@ df |>
   ggplot2::theme(strip.background = ggplot2::element_blank())
 ```
 
-Plotting the Negative Binomial results for $k = 0.5$.
+Next are the results of the negative distribution offspring for varying plausible $R0$ values but a fixed $k$ of $0.5$. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
 
 ```{r}
 #| code-fold: true
@@ -85,7 +87,7 @@ df |>
   ggplot2::theme(strip.background = ggplot2::element_blank())
 ```
 
-Plotting the outbreak size distribution for the Negative Binomial results faceting for values of $k$.
+We now show the results of the outbreak using a negative distribution offspring for varying plausible values of $R0$ and $k$. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
 
 ```{r}
 #| code-fold: true
@@ -110,7 +112,7 @@ df |>
   ggplot2::theme(strip.background = ggplot2::element_blank())
 ```
 
-Plotting the outbreak length distribution for the Negative Binomial results faceting for values of $k$.
+In the next figure, we show the results of outbreak lengths for a negative binomial offspring distribution with varying $R0$ and $k$ values.
 
 ```{r}
 #| code-fold: true
