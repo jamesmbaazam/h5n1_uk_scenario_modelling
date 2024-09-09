@@ -1,5 +1,6 @@
 ---
 title: H5N1 outbreak scenarios
+format: pdf
 ---
 
 This report requires two R packages: {epichains} and {ggplot2}, the former to simulate the branching process model and the latter to visualise the results.
@@ -13,21 +14,31 @@ library(ggplot2)
 
 The `simulate_scenarios()` function from {epichains} calculates the proportion of outbreak statistic (size and/or length) across scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions.
 
+```{r, include=FALSE}
+#| echo: false
+R_by = 0.1
+R_seq <- seq(0, 1.1, R_by)
+k_seq <- c(0.1, 0.5, 1, 5, 1000)
+breaks <- c(0, 1, 2, 5, 10, 20, 50, Inf)
+
+df <- simulate_scenarios(
+  offspring_dist = c("rpois", "rnbinom"), 
+  statistic = c("size", "length"), 
+  R_seq = R_seq, 
+  k_seq = k_seq,
+  breaks = breaks, 
+  include_index_case = FALSE,
+  right = FALSE
+)
+```
+
 Here, we use a simple branching process to explore scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions and their associated chain size and length. The branching process is seeded with an initial number of cases and an offspring distribution, and optionally, a generation time distribution.
 
 We define the chain size as the total number of cases produced by a chain before it goes extinct. The chain length, on the other hand, is the total number of generations reached by a chain before it goes extinct.
 
-We use a reproduction number ($R$) between 0.1 and 0.9 at 0.1 intervals, and for the Negative Binomial offspring distribution, we vary the dispersion parameter ($k$) between 0.5 and 2.5 at 0.5 intervals. Smaller values of $k$ signify more overdispersion in the individual-level transmissibility, in other words transmission is more heterogeneous and superspreading events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
+We use a reproduction number ($R$) between `{r} min(R_seq)` and `{r} max(R_seq)` at `{r} R_by` intervals, and for the Negative Binomial offspring distribution, we vary the dispersion parameter ($k$) at `{r} k_seq`. Smaller values of $k$ signify more overdispersion in the individual-level transmissibility, in other words transmission is more heterogeneous and superspreading events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
 
-```{r}
-df <- simulate_scenarios(
-  offspring_dist = c("rpois", "rnbinom"), 
-  statistic = c("size", "length"), 
-  R_seq = seq(0, 0.9, 0.1), 
-  k_seq = seq(0.5, 2.5, 0.5), 
-  breaks = c(0, 2, 5, 10, 20, 50, 100, Inf)
-)
-```
+We are interested in the number of secondary cases produced in the outbreak. This is the cases that are caused by human-to-human transmission, and not the primary/index case which can be a zoonotic transmission event. All transmission chain sizes and lengths presented below do not include the primary/index case. Thus, outbreaks can be of size and length 0 (red bar) when the primary cases does not infect anyone.
 
 The function produces a `data.frame` that contains the outbreak size or length in intervals (`$interval`), the proportion of outbreaks that fall into that interval (`$Freq`), the reproduction number (`$R`), the dispersion parameter (`$k`, for Poisson distributions $k$ is set to `NA`), the offspring distribution (`$offspring_dist`), and the outbreak statistic (`$statistic`, either size or length). 
 
@@ -48,7 +59,10 @@ df |>
   ggplot2::geom_col(
     mapping = ggplot2::aes(x = as.factor(R), y = Freq, fill = interval)
   ) +
-  ggplot2::scale_x_discrete(name = "Reproduction number (R)") +
+  ggplot2::scale_x_discrete(
+    name = "Reproduction number (R)", 
+    guide = ggplot2::guide_axis(n.dodge=2)
+  ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
   ggplot2::scale_fill_brewer(name = "Outbreak size", palette = "Spectral") +
   ggplot2::facet_wrap(
@@ -73,7 +87,10 @@ df |>
   ggplot2::geom_col(
     mapping = ggplot2::aes(x = as.factor(R), y = Freq, fill = interval)
   ) +
-  ggplot2::scale_x_discrete(name = "Reproduction number (R)") +
+  ggplot2::scale_x_discrete(
+    name = "Reproduction number (R)",
+    guide = ggplot2::guide_axis(n.dodge=2)
+  ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
   ggplot2::scale_fill_brewer(name = "Outbreak size", palette = "Spectral") +
   ggplot2::facet_wrap(
@@ -98,7 +115,10 @@ df |>
   ggplot2::geom_col(
     mapping = ggplot2::aes(x = as.factor(R), y = Freq, fill = interval)
   ) +
-  ggplot2::scale_x_discrete(name = "Reproduction number (R)") +
+  ggplot2::scale_x_discrete(
+    name = "Reproduction number (R)",
+    guide = ggplot2::guide_axis(n.dodge=2)
+  ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
   ggplot2::scale_fill_brewer(name = "Outbreak size", palette = "Spectral") +
   ggplot2::facet_wrap(
@@ -123,7 +143,10 @@ df |>
   ggplot2::geom_col(
     mapping = ggplot2::aes(x = as.factor(R), y = Freq, fill = interval)
   ) +
-  ggplot2::scale_x_discrete(name = "Reproduction number (R)") +
+  ggplot2::scale_x_discrete(
+    name = "Reproduction number (R)",
+    guide = ggplot2::guide_axis(n.dodge=2)
+  ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
   ggplot2::scale_fill_brewer(name = "Outbreak length", palette = "Spectral") +
   ggplot2::facet_wrap(
