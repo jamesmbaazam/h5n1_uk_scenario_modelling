@@ -1,6 +1,5 @@
 ---
 title: H5N1 outbreak scenarios
-format: pdf
 ---
 
 This report requires two R packages: {epichains} and {ggplot2}, the former to simulate the branching process model and the latter to visualise the results.
