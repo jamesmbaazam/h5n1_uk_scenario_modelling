@@ -1,20 +1,48 @@
 ---
 title: H5N1 outbreak scenarios
+author:
+  - name: Joshua W. Lambert
+    orcid: 0000-0001-5218-3046
+    affiliations:
+      - London School of Hygiene and Tropical Medicine
+  - name: James M. Azam
+    orcid: 0000-0001-5782-7330
+    affiliations:
+      - London School of Hygiene and Tropical Medicine
+  - name: Billy J. Quilty
+    orcid: 0000-0002-9094-3728
+    affiliations: 
+      - London School of Hygiene and Tropical Medicine
+  - name: Timothy W. Russell
+    orcid: 0000-0001-5610-6080
+    affiliations: 
+      - London School of Hygiene and Tropical Medicine
+  - name: Jack Ward 
+    affiliations:
+      - London School of Hygiene and Tropical Medicine
+  - name: W. John Edmunds
+    orcid: 0000-0002-9179-2917
+    corresponding: true
+    email: john.edmunds@lshtm.ac.uk
+    affiliations:
+      - London School of Hygiene and Tropical Medicine
+format: pdf
+bibliography: references.bib
 ---
 
-This report requires two R packages: {epichains} and {ggplot2}, the former to simulate the branching process model and the latter to visualise the results.
-
-```{r echo=FALSE}
+```{r}
+#| echo: false
 # install from outbreak_dist branch of {epichains}
 # remotes::install_github("epiverse-trace/epichains@outbreak_dist")
 library(epichains)
 library(ggplot2)
+library(superspreading)
+library(dplyr)
 ```
 
-The `simulate_scenarios()` function from {epichains} calculates the proportion of outbreak statistic (size and/or length) across scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions.
-
-```{r, include=FALSE}
+```{r}
 #| echo: false
+#| include: false
 R_by = 0.1
 R_seq <- seq(0, 1.1, R_by)
 k_seq <- c(0.1, 0.5, 1, 5, 1000)
@@ -31,27 +59,59 @@ df <- simulate_scenarios(
 )
 ```
 
-Here, we use a simple branching process to explore scenarios of reproduction number ($R0$) values, overdispersion, $k$, and offspring distributions and their associated chain size and length. The branching process is seeded with an initial number of cases and an offspring distribution, and optionally, a generation time distribution.
+```{r}
+#| echo: false
+df2 <- subset(df, statistic == "size")
+sub_5_row_idx <- df2$interval == c("[0,1)", "[1,2)", "[2,5)")
+df2 <- df2[sub_5_row_idx, ]
+prop_sub_5_size <- dplyr::summarise(
+  df2, 
+  total_freq_sub_5 = sum(Freq), 
+  .by = c("R", "k", "offspring_dist")
+)
+range_sub_5 <- paste0(
+  signif(range(prop_sub_5_size$total_freq_sub_5) * 100, digits = 3), 
+  "%", collapse = " to "
+)
 
-We define the chain size as the total number of cases produced by a chain before it goes extinct. The chain length, on the other hand, is the total number of generations reached by a chain before it goes extinct.
+df3 <- subset(df2, k <= 0.5)
+range_no_secondary <- paste0(
+  signif(range(df3[df3$interval == "[0,1)", "Freq"]) * 100, digits = 3),
+  "%", collapse = " to "
+)
+```
+
+
+## Abstract
+
+The H5N1 subtype of influenza has global spread in avian populations, but the newly established spread in dairy cattle in the United States of America and wild marine mammal populations raises concerns for transmission between mammals, including human-to-human transmission. Thus the epidemic/pandemic potential for such a virus for which there is minimal preexisting immunity needs to be understood. Using a simple branching process model we show that given a plausible range of transmissibility (reproduction number, $R$) and individual-level variability in transmission between humans ($k$), outbreaks are very unlikely to cause clusters of more than 5 people (across all simulated scenarios the percentage of outbreaks that did not reach 5 cases ranges from `{r} range_sub_5`). If variability in transmission between cases is high ($k \leq 0.5$) then the probability of having zero secondary cases, is high (ranging from `{r} range_no_secondary` across all scenarios), albeit these scenarios pose a risk if highly infectious individuals cause sudden large clusters (i.e. superspreading). The pandemic potential that single importation events pose is minimal, but repeated seeding of infectious cases, and/or viral evolution that may enhance transmissibility should still be monitored.
+
+## Background
+
+Influenza virus subtype H5N1 (A/H5N1) is a RNA virus endemic (enzootic) to wild avian populations and poultry [@neumannH5N1InfluenzaVirulence2015]. This enzootic pathogen has seen widespread global circulation in bird populations, but in 2024 the virus spread into populations of dairy cattle in the United States of America [@u.s.centersfordiseasecontrolandpreventionH5BirdFlu2024; @eisfeldPathogenicityTransmissibilityBovine2024]. There have also been widespread deaths in wild marine mammal populations across South America [@decarvalhoaraujoMortalitySeaLions2024].
+
+Between 2003 and July 2024 there have been 896 recorded human cases [@worldhealthorganisationCumulativeNumberConfirmed2024]. Historically, H5N1 influenza has not seeded outbreaks with sustained human-to-human transmission ($<10$ people per cluster) [@yangDetectingHumanHumanTransmission2007]. Therefore, the reproduction number is thought to be below one, and previous estimates are slightly above 1 for household clusters ($R_0 = 1.14$ (0.61 - 2.14 95% CI, @yangDetectingHumanHumanTransmission2007)). Thus the there is a high likelihood of human-to-human transmission ceasing before creating substantial outbreaks without the need for interventions (e.g. vaccines or non-pharmaceutical interventions). The case fatality rate of H5N1 influenza has been $\sim 52\%$ [@worldhealthorganisationCumulativeNumberConfirmed2024], but recent detection of infections has resulted in less severe symptoms and mortality [@u.s.centersfordiseasecontrolandpreventionH5BirdFlu2024]. However, given the large reservoir of H5N1 influenza in cattle farms, and potentially several other animal populations (panzootic), then spillover into human infection has the potential to cause a sustained outbreak. 
+
+In this report we use a branching process framework to simulate the distribution of outbreak size and length [@deserresEpidemiologyTransmissibleDiseases2000; @farringtonBranchingProcessModels2003] to explore the epidemic/pandemic potential of a H5N1 outbreak under a range of plausible transmissibility scenarios. The size of the outbreak is the total number of cases caused by a primary/index case, and the length of the outbreak is the number of generations of transmission caused. Data to characterise the epidemiology of Influenza A/H5N1 transmission in human populations is sparse, and therefore this report covers a range of possible epidemiological scenarios, investigating highly variable individual-level transmission, and a range of subcritical ($R < 1$) transmission dynamics, with some scenarios where the reproduction number is slightly greater than 1 to simulate instances where sustained transmission and epidemic growth is more probable. 
+
+## Methods
+
+Here, we use a simple branching process to explore the transmission chain _size_ and _length_, across scenarios of varying reproduction number ($R$, there is no depletion of susceptible individuals or change in intrinsic transmissibility in the model so $R$ is equivalent to $R_0$) values, dispersion ($k$), and offspring distributions. The branching process is seeded with a single initial case and the offspring distributions used to simulate outbreaks are Poisson and Negative Binomial distributions.
 
 We use a reproduction number ($R$) between `{r} min(R_seq)` and `{r} max(R_seq)` at `{r} R_by` intervals, and for the Negative Binomial offspring distribution, we vary the dispersion parameter ($k$) at `{r} k_seq`. Smaller values of $k$ signify more overdispersion in the individual-level transmissibility, in other words transmission is more heterogeneous and superspreading events are more likely. As $k$ increases individual-level transmission is more homogeneous and when $k \rightarrow \infty$ the Negative Binomial equals the Poisson offspring distribution. 
 
-We are interested in the number of secondary cases produced in the outbreak. This is the cases that are caused by human-to-human transmission, and not the primary/index case which can be a zoonotic transmission event. All transmission chain sizes and lengths presented below do not include the primary/index case. Thus, outbreaks can be of size and length 0 (red bar) when the primary cases does not infect anyone.
+We are interested in the number of secondary cases produced in the outbreak. This is the cases that are caused by human-to-human transmission, and not the primary/index case which can be a zoonotic transmission event. All transmission chain sizes and lengths presented below do not include the primary/index case. Thus, outbreaks can be of size and length 0 (red bar) when the primary cases does not infect anyone. We define the chain size as the total number of cases produced by a chain before it goes extinct, excluding the index case. The chain length, on the other hand, is the total number of generations reached by a chain before it goes extinct, not including the index case, so the first case infected from a human is generation one.
 
-The function produces a `data.frame` that contains the outbreak size or length in intervals (`$interval`), the proportion of outbreaks that fall into that interval (`$Freq`), the reproduction number (`$R`), the dispersion parameter (`$k`, for Poisson distributions $k$ is set to `NA`), the offspring distribution (`$offspring_dist`), and the outbreak statistic (`$statistic`, either size or length). 
+The branching process simulation is implemented in the {epichains} R package [@azamEpichainsSimulatingAnalysing2024], plots use the {ggplot2} R package [@wickhamGgplot22016], and metrics of superspreading are calculated with the {superspreading} R package [@lambertSuperspreadingEstimateIndividualLevel2024]. All analyses were run using R v4.2.3 [@rcoreteamLanguageEnvironmentStatistical2024]. All code to reproduce this report is open on GitHub at <https://github.com/jamesmbaazam/h5n1_uk_scenario_modelling>. The current version of this report uses the `simulate_scnearios()` function which is only available in the development version on {epichains} which can be found on the `outbreak_dist` branch.
 
-Here are the first 6 rows.
+## Results
 
-```{r}
-head(df)
-```
-
-Below, we show the results for the Poisson distribution for varying plausible $R0$ values. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
+When the offspring distribution is assumed to be Poisson distributed, when $R<0.6$ the majority of outbreaks do not cause any secondary transmission (@fig-pois-dist). For values of $R$ between 0.6 and 1.1 there is still a large proportion of outbreaks that do not cause any secondary transmission, with outbreak sizes of either 1 case, or between 2 and 4 cases. Outbreak clusters of more than 20 cases are rare but can occur when $R > 0.5$ (@fig-pois-dist).
 
 ```{r}
-#| code-fold: true
-#| code-summary: "Show the code"
+#| echo: false
+#| fig-cap: "Distribution of outbreak length (right) and size (left) for a branching process model with a Poisson offspring distribution. The reproduction number ($R$), which for the Poisson model is equal to the mean and variance, of the offspring distribution is plotted on the $x$-axis at values 0.1 - 1.1."
+#| label: fig-pois-dist
 df |> 
   subset(offspring_dist == "rpois") |>
   ggplot2::ggplot() +
@@ -63,23 +123,28 @@ df |>
     guide = ggplot2::guide_axis(n.dodge=2)
   ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
-  ggplot2::scale_fill_brewer(name = "Outbreak size", palette = "Spectral") +
-  ggplot2::facet_wrap(
-    facets = c("offspring_dist", "statistic"), 
-    labeller = ggplot2::label_both
+  ggplot2::scale_fill_brewer(
+    name = "Outbreak length or size", 
+    palette = "Spectral"
   ) +
+  ggplot2::facet_wrap(facets = c("statistic")) +
   ggplot2::labs(
     title = "Outbreak size and length for Poisson Branching Process"
   ) +
   ggplot2::theme_bw() + 
-  ggplot2::theme(strip.background = ggplot2::element_blank())
+  ggplot2::theme(
+    strip.background = ggplot2::element_blank(),
+    plot.title = element_text(size = 12)
+  )
 ```
 
-Next are the results of the negative distribution offspring for varying plausible $R0$ values but a fixed $k$ of $0.5$. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
+
+When moderate individual-level heterogeneity in transmission is introduced to the model ($k = 0.5$) the proportion of index cases that produce secondary cases is reduced across all values of $R$ (@fig-nbinom-dist). The variation in transmission reduces the size and length of outbreaks as many cases will not transmit while a few individual will disproportionately infect others. However, given the value of the reproduction number being either below or only slight above unity the outbreaks that are seeded do not exceed 50 cases, even for our highest assumed value of $R$ (1.1) (@fig-nbinom-dist).
 
 ```{r}
-#| code-fold: true
-#| code-summary: "Show the code"
+#| echo: false
+#| fig-cap: "Distribution of outbreak length (right) and size (left) for a branching process model with a Negative Binomial offspring distribution. The reproduction number ($R$) of the offspring distribution, which for the Negative Binomial distribution is parameterised as the mean, is plotted on the $x$-axis at values 0.1 - 1.1 and the dispersion $k$ is fixed at 0.5."
+#| label: fig-nbinom-dist
 df |> 
   subset(offspring_dist == "rnbinom" & k == 0.5) |>
   ggplot2::ggplot() +
@@ -91,23 +156,27 @@ df |>
     guide = ggplot2::guide_axis(n.dodge=2)
   ) +
   ggplot2::scale_y_continuous(name = "Proportion of outbreaks") +
-  ggplot2::scale_fill_brewer(name = "Outbreak size", palette = "Spectral") +
-  ggplot2::facet_wrap(
-    facets = c("offspring_dist", "statistic"), 
-    labeller = ggplot2::label_both
+  ggplot2::scale_fill_brewer(
+    name = "Outbreak length or size", 
+    palette = "Spectral"
   ) +
+  ggplot2::facet_wrap(facets = "statistic") +
   ggplot2::labs(
     title = "Outbreak size and length for Negative Binomial Branching Process"
   ) +
   ggplot2::theme_bw() + 
-  ggplot2::theme(strip.background = ggplot2::element_blank())
+  ggplot2::theme(
+    strip.background = ggplot2::element_blank(),
+    plot.title = element_text(size = 12)
+  )
 ```
 
-We now show the results of the outbreak using a negative distribution offspring for varying plausible values of $R0$ and $k$. The figure shows the proportion of outbreaks that achieved different outbreak size ranges.
+However, given our current understanding of H5N1 human-to-human transmission it is not clear how overdispersed transmission will be. Therefore, we explore a range of dispersion $k$ values between, $k = 0.1$, which represents highly heterogenous transmission dynamics, with approximately `{r} superspreading::proportion_transmission(R = 1, k = 0.1, percent_transmission = 0.2, method = "t_20")[, 3]` of secondary transmission caused by the most infectious 20% of cases; as well as $k$ values of 0.5 (same as @fig-nbinom-dist), 1, 5, and 1000 (approximately homogeneous transmission). The influence of decreasing $k$ is the same as shown in @fig-pois-dist and @fig-nbinom-dist, whereby more variability in onward human-to-human transmission results in a larger proportion of outbreaks producing fewer total infections (@fig-nbinom-size).
 
 ```{r}
-#| code-fold: true
-#| code-summary: "Show the code"
+#| echo: false
+#| fig-cap: "Distribution of outbreak sizes for a Negative Binomial branching process model at various values of $R$ and $k$. The reproduction number ($R$) of the offspring distribution (mean) is plotted on the $x$-axis at values 0.1 - 1.1, and the plot is facetted by $k$ at values 0.1, 0.5, 1, 5, 1000. $k = 1000$ is approximately homogeneous transmission, i.e. equivalent to the Poisson offspring distribution."
+#| label: fig-nbinom-size
 df |> 
   subset(offspring_dist == "rnbinom" & statistic == "size") |>
   ggplot2::ggplot() +
@@ -131,11 +200,12 @@ df |>
   ggplot2::theme(strip.background = ggplot2::element_blank())
 ```
 
-In the next figure, we show the results of outbreak lengths for a negative binomial offspring distribution with varying $R0$ and $k$ values.
+The outbreak length, in number of generation of transmission, shows a similar pattern to outbreak size. In many simulations the outbreak produces less than 5 generations of transmission before going extinct (@fig-nbinom-length). However, this is more generations of human-to-human transmission than seen for the current outbreak or previous outbeaks [@yangDetectingHumanHumanTransmission2007; @u.s.centersfordiseasecontrolandpreventionH5BirdFlu2024]
 
 ```{r}
-#| code-fold: true
-#| code-summary: "Show the code"
+#| echo: false
+#| fig-cap: "Distribution of outbreak lengths for a Negative Binomial branching process model at various values of $R$ and $k$. The reproduction number ($R$) of the offspring distribution (mean) is plotted on the $x$-axis at values 0.1 - 1.1, and the plot is facetted by $k$ at values 0.1, 0.5, 1, 5, 1000. $k = 1000$ is approximately homogeneous transmission, i.e. equivalent to the Poisson offspring distribution."
+#| label: fig-nbinom-length
 df |> 
   subset(offspring_dist == "rnbinom" & statistic == "length") |>
   ggplot2::ggplot() +
@@ -158,3 +228,12 @@ df |>
   ggplot2::theme_bw() + 
   ggplot2::theme(strip.background = ggplot2::element_blank())
 ```
+
+# Conclusion
+
+If influenza A/H5N1 has epidemiological characteristics closer to SARS [@lloyd-smithSuperspreadingEffectIndividual2005a] or MERS [@kucharskiRoleSuperspreadingMiddle2015] then the outbreaks will likely be self-limiting. If H5N1 transmission is more homogeneous, similar to other influenzas [@bruggerTransmissionSusceptibilitySeasonal2020], then larger outbreak clusters may be observed, although it is still highly improbable that even with homogeneous transmission and $R \sim 1.1$ that outbreak clusters will exceed 50 cases before stopping, without the need for any external intervention. 
+
+The analysis conducted here has used a wide range of plausible epidemiological scenarios on transmissability, but better data tracing human-to-human transmission will enable the parameters to be refined to more accurately measure possible outbreak magnitude and pandemic potential. This report can easily be updated with new epidemiological parameter estimates and rerun, with possible extensions if we obtain evidence that viral evolution of H5N1 is increasing it's transmissibility, such as reassortment from other influenza subtypes [@neumannH5N1InfluenzaVirulence2015].
+
+## References
+
