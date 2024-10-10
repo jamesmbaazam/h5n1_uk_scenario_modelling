@@ -4,6 +4,7 @@ if (!require("pak")) install.packages("pak")
 
 # Load required libraries
 library(tidyverse)
+#library(tidytable)
 library(epichains)
 library(truncdist)
 library(epiparameter)
@@ -12,3 +13,6 @@ library(fitdistrplus)
 library(ggplot2)
 library(gridExtra)
 library(readxl)
+library(tictoc)
+
+select <- dplyr::select

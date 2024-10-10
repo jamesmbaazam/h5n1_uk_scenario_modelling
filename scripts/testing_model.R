@@ -8,40 +8,6 @@ set.seed(123)
 
 tmax = 1000
 
-#' Calculate proportion of runs that have controlled outbreak
-#'
-#' @author Joel Hellewell
-#' @export
-#' @inheritParams detect_extinct
-extinct_prob <- function(outbreak_df_week = NULL, cap_cases  = NULL, week_range = 12:16) {
-  
-  n_sim <- max(outbreak_df_week$sim)
-  
-  extinct_runs <- detect_extinct(outbreak_df_week, cap_cases, week_range)
-  out <-  sum(extinct_runs$extinct) / n_sim
-  
-  return(out)
-}
-
-#' Calculate whether outbreaks went extinct or not
-#' @author Joel Hellewell
-#' @param outbreak_df_week data.table  weekly cases produced by the outbreak model
-#' @param cap_cases integer number of cumulative cases at which the branching process was terminated
-#' @param week_range integer vector giving the (zero indexed) week range to test for whether an extinction occurred.
-#' @importFrom data.table as.data.table fifelse
-#'
-#' @export
-#'
-detect_extinct <- function(outbreak_df_week  = NULL, cap_cases  = NULL, week_range = 12:16) {
-  
-  outbreak_df_week <- as.data.table(outbreak_df_week)
-  outbreak_df_week <- outbreak_df_week[week %in% week_range]
-  outbreak_df_week[, list(
-    extinct = fifelse(all(weekly_cases == 0 & cumulative < cap_cases), 1, 0)
-  ), by = sim]
-
-}
-
 # Define the flight_test_fun function
 flight_test_fun <- function(chain_data, test_before_flight, test_after_flight, pre_flight_test_delay, post_flight_test_delay, flight_duration) {
   
@@ -152,47 +118,55 @@ run_scenario <- function(sim_chains_df, test_before_flight, test_after_flight, p
 
 # Define scenarios
 scenarios <- list(
-  list(name = "No testing", pre = 0, post = 0, pre_delay = NA, post_delay = NA, flight_duration = 0.2),
-  list(name = "Pre-flight (1 day before)", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2),
-  list(name = "Post-flight (1 day after)", pre = 0, post = 1, pre_delay = NA, post_delay = 1, flight_duration = 0.2),
-  list(name = "Both (1 day before and after)", pre = 1, post = 1, pre_delay = 1, post_delay = 1, flight_duration = 0.2)
+  list(name = "A. No testing", pre = 0, post = 0, pre_delay = NA, post_delay = NA, flight_duration = 0.2),
+  list(name = "B. Pre-flight (1 day before)", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2)
+  #list(name = "C. Post-flight (1 day after)", pre = 0, post = 1, pre_delay = NA, post_delay = 1, flight_duration = 0.2),
+  #list(name = "D. Both (1 day before and after)", pre = 1, post = 1, pre_delay = 1, post_delay = 1, flight_duration = 0.2)
 )
 
 # Create a data frame with all combinations of R values and size parameters
 simulation_params <- expand_grid(
-  R = 1,
-  size = 0.1
-)
+  R = c(1,2),
+  size = c(0.1,1)
+) %>% 
+  mutate(R_k_id = row_number())
 
 run_simulation <- function(R, size) {
-  results <- map(1:100, function(i) {
     sim_chains <- simulate_chains(
       n_chains = 100,
       statistic = "length",
-      offspring_dist = function(n, mu) rnbinom(n, mu = mu, size = size),
-      stat_threshold = 15,
-      generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
-      mu = R
+      offspring_dist = function(n, mu) rnbinom(n, mu = R, size = size),
+      stat_threshold = 20,
+      generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE)
     )
+    
     
     sim_chains_df <- as.data.frame(sim_chains)
     
-    map(scenarios, ~list(
+    res <- map(scenarios, ~list(
       scenario = .$name,
       chains = run_scenario(sim_chains_df, .$pre, .$post, .$pre_delay, .$post_delay, .$flight_duration, .$name)
     ))
-  })
+    
+    # Convert to data.frame
+    result <- res %>%
+      map_df(~ .x$chains %>% 
+               mutate(scenario = .x$scenario) %>%
+               select(scenario, everything()))
 }
 
 # Run simulations for all combinations of R and size
+tic()
 all_results <- simulation_params %>%
-  mutate(results = map2(R, size, run_simulation)) %>%
-  unnest(results)
+  mutate(results = map2(R, size, run_simulation))  %>%
+  unnest(results) 
+toc()
 
-# Function to process chains and calculate daily cases
-process_chains <- function(chains, scenario) {
-#browser()
-  chains %>%
+
+# Function to aggregate chains and calculate daily cases
+aggregate_chains <- function(data) {
+browser()
+  data %>%
     mutate(time = floor(time)) %>%
     filter(time > flight_time) %>%
     group_by(time, .drop = FALSE) %>% 
@@ -202,13 +176,39 @@ process_chains <- function(chains, scenario) {
     mutate(Scenario = scenario) 
 }
 
-# Process all chains
-processed_chains <- all_results %>% 
-  mutate(sim = row_number()) %>% 
-  unnest(results) %>% 
-  unnest_wider(results) %>%
-  mutate(processed = map2(chains, scenario, process_chains)) %>%
-  unnest(processed) 
+# Plot aggregated daily cases
+all_results %>% 
+  filter(time > flight_time) %>%
+  mutate(day = floor(time)) %>%
+  group_by(scenario, R, size, rep, day) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x = day, y = n, color = scenario)) +
+  geom_line(alpha = 0.2) +
+  facet_grid(R~size) +
+  labs(x = "Day", y = "Daily Cases", title = "Daily Cases by Scenario and R_k_id") 
+
+#Plot cumulative cases
+all_results %>% 
+  filter(time > flight_time) %>%
+  mutate(day = floor(time)) %>%
+  group_by(scenario, R, size, rep, chain, day) %>%
+  summarise(n = n()) %>%
+  arrange(day) %>%
+  ggplot(aes(x = day, y = cumsum(n), group = interaction(rep,chain))) +
+  geom_line(alpha = 0.2) +
+  facet_grid(R~size) +
+  labs(x = "Day", y = "Cumulative Cases", title = "Cumulative Cases by Scenario and R_k_id")
+
+#Plot individual chains
+all_results %>% 
+  filter(time > flight_time) %>%
+  mutate(day = floor(time)) %>%
+  group_by(scenario, R, size, rep, day, chain) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  ggplot(aes(x = day, y = n, group = interaction(rep,chain))) +
+  geom_line(alpha = 0.2) +
+  facet_grid(R~size) +
+  labs(x = "Day", y = "Daily Cases", title = "Daily Cases by Scenario and R_k_id")
 
 # Plot all simulations for each scenario
 plot_all_simulations <- function(data) {
@@ -255,3 +255,5 @@ plot_extinct_proportions <- function(data) {
 # Generate and display the extinction plot
 p_extinct <- plot_extinct_proportions(extinct_proportions)
 print(p_extinct)
+
+
