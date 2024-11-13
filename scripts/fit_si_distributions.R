@@ -1,6 +1,7 @@
 library(data.table)
 library(cmdstanr)
 library(tidybayes)
+library(loo)
 
 # Source the helper functions
 source("R/utils.R")
