@@ -2,10 +2,10 @@ library(data.table)
 library(cmdstanr)
 library(tidybayes)
 
-#--- Source the helper functions
+# Source the helper functions
 source("R/utils.R")
 
-#--- Loading in data
+# Loading in data
 data_files <- list(
   "index" = "data/si_raw_data/index.csv",
   "serial" = "data/si_raw_data/serial.csv"
@@ -13,64 +13,77 @@ data_files <- list(
 
 data_tables <- lapply(data_files, fread)
 
-#-- Creating vectors of intervals
-intervals <- lapply(data_tables, create_intervals)
+# Combining data.tables for panels A and B, as per new interpretation
+dt_onsets <- merge(
+  dt_index[, .(days, onsets_index = nonzoonotic)],
+  dt_serial[, .(days, onsets_serial = nonzoonotic)])[
+  , onsets := onsets_index + onsets_serial][, .(days, onsets)]
 
-#--- Putting data into format for Stan
-stan_data <- lapply(intervals, create_stan_data)
+# Calculate the intervals for fitting the serial interval distributions where 
+# Interpret the “onsets” as frequency counts. I.e., the raw data provides counts
+# of the number of cases that showed symptoms on specific days. 
+# We convert this into a format representing each interval explicitly
+dt_onsets_intervals <- data.table(
+  time =  0:length(dt_onsets$days),
+  onsets = rep(dt_onsets$days, dt_onsets$onsets))
 
-#--- Compiling Stan models
-models <- list(
-  gamma = cmdstan_model(stan_file = "stan/gamma.stan"),
-  lognormal = cmdstan_model(stan_file = "stan/lognormal.stan")
-)
+# Compile Stan models
+mod_lognormal <- cmdstan_model("stan/distributions/lognormal.stan")
+mod_gamma <- cmdstan_model("stan/distributions/gamma.stan")
 
-#--- Fitting models
-fit_results <- list(
-  gamma = lapply(stan_data, fit_models, model = models$gamma),
-  lognormal = lapply(stan_data, fit_models, model = models$lognormal)
-)
+# Get data into format for Stan
+stan_data <- list(
+  N = dt_onsets_intervals[, .N],
+  y = dt_onsets_intervals[, onsets],
+  N_rep = 100)
 
-#--- Extracting posterior predictive draws using tidybayes
-posterior_draws <- list(
-  gamma = lapply(fit_results$gamma, function(panel_fits) lapply(panel_fits, extract_draws)),
-  lognormal = lapply(fit_results$lognormal, function(panel_fits) lapply(panel_fits, extract_draws))
-)
+# Fit models to data
+fit_lognormal <- mod_lognormal$sample(stan_data, chains = 4, parallel_chains = 4)
+fit_gamma <- mod_gamma$sample(stan_data, chains = 4, parallel_chains = 4)
 
-#--- Combining posterior predictive draws
-dt_draws <- rbind(
-  combine_draws("index", posterior_draws, "gamma"),
-  combine_draws("serial", posterior_draws, "gamma"),
-  combine_draws("index", posterior_draws, "lognormal"),
-  combine_draws("serial", posterior_draws, "lognormal")
-)
+# Extract posterior samples
+dt_lognormal <- melt(
+  data.table(fit_lognormal$draws("y_rep", format = "data.frame")),
+  measure.vars = patterns("y_rep"))
 
-#--- Saving combined draws
-saveRDS(dt_draws, "posterior_predictive/dt_draws.rds")
+dt_gamma <- melt(
+  data.table(fit_gamma$draws("y_rep", format = "data.frame")),
+  measure.vars = patterns("y_rep"))
 
-#---  LOO-CV analysis for picking between Gamma and Lognormal
-# Create a named list to store the LOO estimates, extracting them from the nested structure
-loo_results <- list(
-  gamma_index_non_zoonotic = fit_results$gamma$index$nonzoonotic$loo(),
-  gamma_index_zoonotic = fit_results$gamma$index$zoonotic$loo(),
-  gamma_serial_non_zoonotic = fit_results$gamma$serial$nonzoonotic$loo(),
-  gamma_serial_zoonotic = fit_results$gamma$serial$zoonotic$loo(),
-  lognormal_index_non_zoonotic = fit_results$lognormal$index$nonzoonotic$loo(),
-  lognormal_index_zoonotic = fit_results$lognormal$index$zoonotic$loo(),
-  lognormal_serial_non_zoonotic = fit_results$lognormal$serial$nonzoonotic$loo(),
-  lognormal_serial_zoonotic = fit_results$lognormal$serial$zoonotic$loo()
-)
+dt_lognormal[, variable := NULL]
+dt_gamma[, variable := NULL]
 
-print(loo_compare(
-  loo_results$gamma_index_non_zoonotic,
-  loo_results$lognormal_index_non_zoonotic,
-  loo_results$gamma_serial_non_zoonotic,
-  loo_results$lognormal_serial_non_zoonotic
-), simplify = FALSE)
+# Combine distribution type
+dt_si_posteriors <- rbind(
+  dt_lognormal[, type := "Lognormal"],
+  dt_gamma[, type := "Gamma"])
 
-print(loo_compare(
-  loo_results$gamma_index_zoonotic,
-  loo_results$lognormal_index_zoonotic,
-  loo_results$gamma_serial_zoonotic,
-  loo_results$lognormal_serial_zoonotic
-), simplify = FALSE)
+# Plot distributions 
+p_si <- dt_si_posteriors |> 
+  ggplot() + 
+  geom_density(aes(x = value, fill = type), alpha = 0.8) + 
+  geom_vline(
+    data = dt_summary, aes(xintercept = me),
+    linetype = "dashed") + 
+  facet_grid(~type) + 
+  theme_bw() + 
+  theme(legend.position = "none") + 
+  labs(x = "Time (days since exposure)", y = "Probability") + 
+  lims(x = c(0, 30))
+
+ggsave("plots/serial_interval.png", p_si, width = 8, height = 4)
+
+# Summarise distributions
+dt_summary_median <- summarise_draws(
+  dt_si_posteriors, by = "type", column_name = "value")[, average := "Median"]
+
+# Summarise distributions
+dt_summary_mean <- dt_si_posteriors[, 
+  .(me = mean(value), 
+    lo = mean(value) - IQR(value),
+    hi = mean(value) + IQR(value)), 
+  by = "type"][, average := "Mean"]
+
+knitr::kable(rbind(dt_summary_median, dt_summary_mean)[order(type, average)])
+
+
