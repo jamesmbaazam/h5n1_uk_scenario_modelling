@@ -81,7 +81,7 @@ dt_onsets_plot <- rbind(
 # Create the plot with observed data
 p_si <- ggplot() +
   geom_histogram(
-    data = df_observed_all,
+    data = dt_onsets_plot,
     aes(x = time, y = after_stat(density)),
     binwidth = 1,
     fill = "gray",
