@@ -1,7 +1,8 @@
 library(data.table)
 library(cmdstanr)
-library(tidybayes)
+library(ggplot2)
 library(loo)
+library(tidybayes)
 
 # Source the helper functions
 source("R/utils.R")
@@ -16,8 +17,8 @@ data_tables <- lapply(data_files, fread)
 
 # Combining data.tables for panels A and B, as per new interpretation
 dt_onsets <- merge(
-  dt_index[, .(days, onsets_index = nonzoonotic)],
-  dt_serial[, .(days, onsets_serial = nonzoonotic)])[
+  data_tables$index[, .(days, onsets_index = nonzoonotic)],
+  data_tables$serial[, .(days, onsets_serial = nonzoonotic)])[
   , onsets := onsets_index + onsets_serial][, .(days, onsets)]
 
 # Calculate the intervals for fitting the serial interval distributions where 
@@ -59,32 +60,54 @@ dt_si_posteriors <- rbind(
   dt_lognormal[, type := "Lognormal"],
   dt_gamma[, type := "Gamma"])
 
-# Plot distributions 
-p_si <- dt_si_posteriors |> 
-  ggplot() + 
-  geom_density(aes(x = value, fill = type), alpha = 0.8) + 
+# Summarise distributions
+dt_summary_median <- summarise_draws(
+  dt_si_posteriors, by = "type", 
+  column_name = "value")[, average := "Median"]
+
+# Summarise distributions
+dt_summary_mean <- dt_si_posteriors[, .(
+  me = mean(value), 
+  lo = mean(value) - IQR(value),
+  hi = mean(value) + IQR(value)), 
+  by = "type"][, average := "Mean"]
+
+# Creating PMF of underlying data for plotting behind fitted distributions
+dt_onsets_plot <- rbind(
+  data.table(time = dt_onsets_intervals$onsets, type = "Lognormal"),
+  data.table(time = dt_onsets_intervals$onsets, type = "Gamma")
+)
+
+# Create the plot with observed data
+p_si <- ggplot() +
+  geom_histogram(
+    data = df_observed_all,
+    aes(x = time, y = after_stat(density)),
+    binwidth = 1,
+    fill = "gray",
+    alpha = 1,
+    boundary = 0,
+    closed = "left"
+  ) +
+  geom_density(
+    data = dt_si_posteriors,
+    aes(x = value, fill = type),
+    alpha = 0.8
+  ) +
   geom_vline(
-    data = dt_summary, aes(xintercept = me),
-    linetype = "dashed") + 
-  facet_grid(~type) + 
-  theme_bw() + 
-  theme(legend.position = "none") + 
-  labs(x = "Time (days since exposure)", y = "Probability") + 
+    data = dt_summary_median,
+    aes(xintercept = me),
+    linetype = "dashed"
+  ) +
+  facet_grid(~type) +
+  theme_linedraw() +
+  theme(legend.position = "none") +
+  labs(x = "Time (days since exposure)", y = "Density") +
   lims(x = c(0, 30))
 
 ggsave("plots/serial_interval.png", p_si, width = 8, height = 4)
 
-# Summarise distributions
-dt_summary_median <- summarise_draws(
-  dt_si_posteriors, by = "type", column_name = "value")[, average := "Median"]
-
-# Summarise distributions
-dt_summary_mean <- dt_si_posteriors[, 
-  .(me = mean(value), 
-    lo = mean(value) - IQR(value),
-    hi = mean(value) + IQR(value)), 
-  by = "type"][, average := "Mean"]
-
-knitr::kable(rbind(dt_summary_median, dt_summary_mean)[order(type, average)])
+knitr::kable(
+  rbind(dt_summary_median, dt_summary_mean)[order(type, average)])
 
 
