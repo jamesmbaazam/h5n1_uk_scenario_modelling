@@ -110,4 +110,7 @@ ggsave("plots/serial_interval.png", p_si, width = 8, height = 4)
 knitr::kable(
   rbind(dt_summary_median, dt_summary_mean)[order(type, average)])
 
+#--- LOO analysis 
+knitr::kable(loo_compare(fit_lognormal$loo(), fit_gamma$loo()))
+
 
