@@ -1,11 +1,11 @@
+# if primarycensored is not installed, install the development version from the
+# repository using this command:
+# devtools::install_github("epinowcast/primarycensored")
 library(data.table)
-library(cmdstanr)
+library(primarycensored) # devtools::install_github("epinowcast/primarycensored")
 library(ggplot2)
 library(loo)
 library(tidybayes)
-
-# Source the helper functions
-source("R/utils.R")
 
 # Loading in data
 data_files <- list(
@@ -19,41 +19,75 @@ data_tables <- lapply(data_files, fread)
 dt_onsets <- merge(
   data_tables$index[, .(days, onsets_index = nonzoonotic)],
   data_tables$serial[, .(days, onsets_serial = nonzoonotic)])[
-  , onsets := onsets_index + onsets_serial][, .(days, onsets)]
+    , onsets := onsets_index + onsets_serial][, .(days, onsets)]
 
-# Calculate the intervals for fitting the serial interval distributions where 
+## upper limits
+dt_onsets[, days_upper := days + 1]
+## primary window
+dt_onsets[, pwindow := 1]
+## observation time
+dt_onsets[, relative_obs_time := Inf]
+
+# Calculate the intervals for fitting the serial interval distributions where
 # Interpret the “onsets” as frequency counts. I.e., the raw data provides counts
-# of the number of cases that showed symptoms on specific days. 
+# of the number of cases that showed symptoms on specific days.
 # We convert this into a format representing each interval explicitly
 dt_onsets_intervals <- data.table(
   time =  0:length(dt_onsets$days),
   onsets = rep(dt_onsets$days, dt_onsets$onsets))
 
-# Compile Stan models
-mod_lognormal <- cmdstan_model("stan/distributions/lognormal.stan")
-mod_gamma <- cmdstan_model("stan/distributions/gamma.stan")
+# This compiles the primarycensored Stan model
+pcd_model <- pcd_cmdstan_model()
 
-# Get data into format for Stan
-stan_data <- list(
-  N = dt_onsets_intervals[, .N],
-  y = dt_onsets_intervals[, onsets],
-  N_rep = 100)
+# Fit the model using fitdistcens with censored gamma distribution
+# See documentation for primarycensored to find which dist_ids refer to which parametric distributions
+# Here: https://cran.r-project.org/web/packages/primarycensored/primarycensored.pdf
+
+# dist_id = 2 -> Gamma distribution
+gamma_data <- pcd_as_stan_data(
+  dt_onsets,
+  delay = "days",
+  delay_upper = "days_upper",
+  n = "onsets",
+  dist_id = 2, # This is where the parametric form of the distribution being fit is specified. I.e., 2 = Gamma
+  primary_id = 1,
+  param_bounds = list(lower = c(0, 0), upper = c(Inf, Inf)),
+  primary_param_bounds = list(lower = numeric(0), upper = numeric(0)),
+  priors = list(location = c(1, 1), scale = c(1, 1)),
+  primary_priors = list(location = numeric(0), scale = numeric(0)),
+  compute_log_lik = TRUE
+)
+
+# dist_id = 1 -> Lognormal distribution
+ln_data <- pcd_as_stan_data(
+  dt_onsets,
+  delay = "days",
+  delay_upper = "days_upper",
+  n = "onsets",
+  dist_id = 1, # This is where the parametric form of the distribution being fit is specified. I.e., 1 = Lognormal
+  primary_id = 1,
+  param_bounds = list(lower = c(-Inf, 0), upper = c(Inf, Inf)),
+  primary_param_bounds = list(lower = numeric(0), upper = numeric(0)),
+  priors = list(location = c(1, 1), scale = c(1, 1)),
+  primary_priors = list(location = numeric(0), scale = numeric(0)),
+  compute_log_lik = TRUE
+)
 
 # Fit models to data
-fit_lognormal <- mod_lognormal$sample(stan_data, chains = 4, parallel_chains = 4)
-fit_gamma <- mod_gamma$sample(stan_data, chains = 4, parallel_chains = 4)
+fit_lognormal <- pcd_model$sample(ln_data, chains = 4, parallel_chains = 4)
+fit_gamma <- pcd_model$sample(gamma_data, chains = 4, parallel_chains = 4)
 
 # Extract posterior samples
-dt_lognormal <- melt(
-  data.table(fit_lognormal$draws("y_rep", format = "data.frame")),
-  measure.vars = patterns("y_rep"))
+dt_lognormal <- as.data.table(spread_draws(fit_lognormal, params[id]))
+dt_lognormal <- dcast(
+  dt_lognormal, .chain + .iteration + .draw ~ id, 
+  value.var = "params")
 
-dt_gamma <- melt(
-  data.table(fit_gamma$draws("y_rep", format = "data.frame")),
-  measure.vars = patterns("y_rep"))
+dt_lognormal[, value := rlnorm(n = .N, meanlog = `1`, sdlog = `2`)]
 
-dt_lognormal[, variable := NULL]
-dt_gamma[, variable := NULL]
+dt_gamma <- as.data.table(spread_draws(fit_gamma, params[id]))
+dt_gamma <- dcast(dt_gamma, .chain + .iteration + .draw ~ id, value.var = "params")
+dt_gamma[, value := rgamma(n = .N, shape = `1`, rate = `2`)]
 
 # Combine distribution type
 dt_si_posteriors <- rbind(
@@ -61,9 +95,11 @@ dt_si_posteriors <- rbind(
   dt_gamma[, type := "Gamma"])
 
 # Summarise distributions
-dt_summary_median <- summarise_draws(
-  dt_si_posteriors, by = "type", 
-  column_name = "value")[, average := "Median"]
+dt_summary_median <- dt_si_posteriors[, .(
+  me = median(value),
+  lo = median(value) - IQR(value),
+  hi = median(value) + IQR(value)),
+  by = "type"][, average := "Median"]
 
 # Summarise distributions
 dt_summary_mean <- dt_si_posteriors[, .(
@@ -112,5 +148,4 @@ knitr::kable(
 
 #--- LOO analysis 
 knitr::kable(loo_compare(fit_lognormal$loo(), fit_gamma$loo()))
-
 
