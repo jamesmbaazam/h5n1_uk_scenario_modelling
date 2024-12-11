@@ -9,18 +9,9 @@
 sensitivity_function <- function(t) {
   if (t < 0) return(0)
   if (t <= 2) return(0.475 * t)
-  if (t <= 14) return(0.95 - 0.19 * (t - 2))
+  if (t <= 7) return(0.95 - 0.19 * (t - 2))
   return(0)
 }
-
-data.frame(t=0:10) %>% 
-  mutate(sensitivity = map_dbl(t, sensitivity_function)) %>% 
-  ggplot(aes(x = t, y = sensitivity)) +
-  geom_line() +
-  labs(title = "Time-varying sensitivity function",
-       x = "Time (days)",
-       y = "Sensitivity") +
-  theme_minimal()
 
 #I. Ogi-Gittins, W.S. Hart, J. Song, R.K. Nash, J. Polonsky, A. Cori, E.M. Hill, R.N. Thompson. A simulation-based approach for estimating the time-dependent reproduction number from temporally aggregated disease incidence time series data, Epidemics,Volume 47, 2024
 si_mean <- 2.6

@@ -82,3 +82,5 @@ stan/lognormal
 *.vrb
 *.xdv
 *.run.xml
+
+Results/

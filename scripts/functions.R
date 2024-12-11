@@ -1,33 +1,61 @@
-# Updated function to initialize flight variables and filter chains
+# Modified initialize_flight_chains function
 initialize_flight_chains <- function(chain_data, daily_flight_probability, si_draws) {
-  results <- chain_data %>%
+  
+  # Get unique chains
+  unique_chains <- unique(chain_data$chain)
+  n_unique_chains <- length(unique_chains)
+  
+  # First, randomly assign flight status to all chains
+  chain_flight_status <- tibble(
+    chain = unique_chains,
+    will_fly_chain = rbinom(n_unique_chains, 1, daily_flight_probability) == 1 
+  )
+  
+  # Filter chains first based on flight status
+  filtered_chains <- chain_data %>%
+    left_join(chain_flight_status, by = "chain") %>%
+    filter(will_fly_chain) %>%
+    select(-will_fly_chain)
+  
+  # Then process only the filtered chains
+  results <- filtered_chains %>%
     mutate(
       flight_time = time + sample(x = si_draws$y_rep, size = n(), replace = TRUE),
-      will_fly = rbinom(n(), 1, daily_flight_probability) == 1,
-      flight_time = if_else(will_fly, flight_time, Inf)
+      will_fly = TRUE,  # All remaining chains will fly
+      flight_time = flight_time  # No need for if_else anymore
     ) %>% 
     arrange(chain, time)
   
   # Add ancestry column
   results <- add_ancestry_column(results)
   
-  # Filter out non-flying individuals and their subsequent chains
-  flying_chains <- results %>%
-    group_by(chain) %>%
-    filter(any(will_fly)) %>%  # Keep chains where at least one person flies
-    ungroup()
-  
   # Add indicator for infections in destination country
-  flying_chains <- flying_chains %>%
+  results <- results %>%
     group_by(chain) %>%
     mutate(
-      flown_ancestors = list(infectee[will_fly]),
-      destination_infection = map_lgl(ancestry, ~any(.x %in% flown_ancestors[[1]]))
+      flown_ancestors = list(infectee),  # All infectees in remaining chains will fly
+      destination_infection = map_lgl(ancestry, ~TRUE)  # All infections in remaining chains are destination infections
     ) %>%
     ungroup() %>%
-    select(-flown_ancestors)  # Remove the temporary column
+    select(-flown_ancestors)
   
-  return(flying_chains)
+  return(results)
+}
+
+# Modified generate_initial_chains function
+generate_initial_chains <- function(simulation_params, n_chains, stat_threshold) {
+  
+  simulation_params %>%
+    mutate(
+      initial_chain = map(R_k_id, ~ simulate_chains(
+        n_chains = n_chains,
+        statistic = "length",
+        offspring_dist = function(n, mu) rnbinom(n, mu = 1.5, size = 0.1),
+        stat_threshold = stat_threshold,
+        generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
+        tf = tmax
+      ))
+    )
 }
 
 # Updated flight_test_fun to include flight_duration
@@ -117,11 +145,8 @@ flight_test_fun <- function(flying_chains, test_before_flight, test_after_flight
 }
 
 # Updated run_scenarios_on_chains function
-run_scenarios_on_chains <- function(initial_chains_df, scenarios, daily_flight_probability, si_draws) {
-  # Initialize flight chains once
-  flying_chains <- initialize_flight_chains(initial_chains_df, daily_flight_probability, si_draws)
-  
-  # Run scenarios
+run_scenarios_on_chains <- function(flying_chains, scenarios, daily_flight_probability, si_draws) {
+  # Run scenarios directly on the pre-initialized flight chains
   res <- map(scenarios, ~list(
     scenario = .$name,
     chains = flight_test_fun(flying_chains, .$pre, .$post, .$pre_delay, .$post_delay, .$flight_duration, .$quarantine_start_day)
@@ -162,4 +187,173 @@ add_ancestry_column <- function(chain_data) {
 prune_chain <- function(chain_data, isolated_ancestor) {
   chain_data %>%
     filter(!map_lgl(ancestry, ~isolated_ancestor %in% .))
+}
+
+##### Plotting functions #####
+# Function to create daily cases plot
+plot_daily_cases <- function(data, color_palette) {
+  data %>% 
+    filter(destination_infection) %>% 
+    mutate(day = floor(time)) %>%
+    group_by(scenario, R, size, chain, day) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    ggplot(aes(x = day, y = n, color = scenario, group = interaction(chain, scenario))) +
+    geom_line(alpha = 0.2) +
+    scale_colour_brewer(palette = color_palette) +
+    facet_grid(R ~ size) +
+    labs(x = "Day", y = "Daily Cases", title = "Daily Cases by Scenario") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Function to create cumulative cases plot
+plot_cumulative_cases <- function(data, color_palette) {
+  data %>% 
+    mutate(day = floor(time)) %>%
+    group_by(scenario, R, size, chain, day) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    complete(day = 0:1000, scenario, R, size, chain, fill = list(n = 0)) %>%
+    group_by(scenario, R, size, chain) %>%
+    mutate(cumsum_n = cumsum(n)) %>% 
+    ggplot(aes(x = day, y = cumsum_n, group = interaction(chain, scenario), colour = scenario)) +
+    geom_line(alpha = 0.2) +
+    scale_colour_brewer(palette = color_palette) +
+    facet_grid(R ~ size) +
+    labs(x = "Day", y = "Cumulative Cases", title = "Cumulative Cases by Scenario") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Function to create average cumulative cases plot
+plot_avg_cumulative_cases <- function(data, color_palette) {
+  avg_data <- data %>%
+    mutate(day = floor(time)) %>%
+    group_by(scenario, R, size, chain, day) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    complete(day = 0:1000, scenario, R, size, chain, fill = list(n = 0)) %>%
+    group_by(scenario, R, size, chain) %>%
+    mutate(cumsum_n = cumsum(n)) %>%
+    group_by(scenario, R, size, day) %>%
+    summarise(avg_cumsum = mean(cumsum_n),
+              low_ci = quantile(cumsum_n, 0.025),
+              high_ci = quantile(cumsum_n, 0.975),
+              .groups = "drop")
+  
+  ggplot(avg_data, aes(x = day, y = avg_cumsum, color = scenario)) +
+    geom_line() +
+    #geom_ribbon(aes(ymin = low_ci, ymax = high_ci, fill = scenario), alpha = 0.2, colour = NA) +
+    scale_colour_brewer(palette = color_palette) +
+    scale_fill_brewer(palette = color_palette) +
+    facet_grid(R ~ size) +
+    labs(x = "Day", y = "Average Cumulative Cases", title = "Average Cumulative Cases by Scenario") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Function to calculate time to reach 100 cases with uncertainty
+calculate_time_to_100_cases <- function(data) {
+  # Function to calculate day of 100 cases for a chain
+  calc_day_100 <- function(chain_data) {
+    result <- chain_data %>%
+      filter(destination_infection) %>%
+      mutate(day = floor(time)) %>%
+      group_by(day) %>%
+      summarise(daily_cases = n(), .groups = "drop") %>%
+      arrange(day) %>%
+      mutate(cumulative_cases = cumsum(daily_cases)) %>%
+      filter(cumulative_cases >= 100) %>%
+      slice_min(day, n = 1) %>%
+      pull(day)
+    
+    # Return NA if no day reaches 100 cases
+    if (length(result) == 0) return(NA)
+    return(result)
+  }
+  
+  # Calculate days to 100 cases for each chain
+  results <- data %>%
+    group_by(scenario, R, size, chain) %>%
+    nest() %>%
+    mutate(day_100 = map_dbl(data, ~calc_day_100(.))) %>%
+    group_by(scenario, R, size) %>%
+    summarise(
+      actual_results = median(day_100, na.rm = TRUE),
+      lower_ci = quantile(day_100, probs = 0.025, na.rm = TRUE),
+      upper_ci = quantile(day_100, probs = 0.975, na.rm = TRUE),
+      n_chains_reached_100 = sum(!is.na(day_100)),
+      total_chains = n(),
+      .groups = "drop"
+    )
+  
+  # Calculate actual cumulative cases on the median day
+  results <- results %>%
+    rowwise() %>%
+    mutate(
+      cumulative_cases = data %>%
+        filter(destination_infection) %>%
+        mutate(day = floor(time)) %>%
+        filter(day <= actual_results) %>%
+        nrow()
+    )
+  
+  return(results)
+}
+
+# Update the plotting function to show proportion of chains reaching 100 cases
+plot_time_to_100_cases <- function(data, color_palette) {
+  ggplot(data, aes(x = scenario, y = actual_results, colour = scenario)) +
+    geom_pointrange(aes(ymin = lower_ci, ymax = upper_ci), size = 1) +
+    geom_text(aes(label = sprintf("Day %d\n(%d cases)\n[CI: %d-%d]\n%d/%d chains", 
+                                 round(actual_results), 
+                                 cumulative_cases,
+                                 round(lower_ci),
+                                 round(upper_ci),
+                                 n_chains_reached_100,
+                                 total_chains)), 
+              vjust = -0.5, size = 3) +
+    scale_colour_brewer(palette = color_palette) +
+    facet_grid(R ~ size) +
+    labs(x = "Scenario", 
+         y = "Time (days)", 
+         title = "Time to Reach 100 Total Cumulative Cases",
+         subtitle = "Points show median day, error bars show 95% quantiles across chains") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "bottom")
+}
+
+# Function to calculate extinction probability
+calculate_extinction_probability <- function(data) {
+  
+  data %>%
+    mutate(day  = floor(time)) %>%
+    group_by(scenario, R, size, chain, day) %>%
+    summarise(n = n(),
+              extinct = n == 0,
+              .groups = "drop") %>%
+    group_by(scenario, R, size, day) %>%
+    summarise(
+      extinction_prob = mean(extinct),
+      lower_ci = binom.test(sum(extinct), n())$conf.int[1],
+      upper_ci = binom.test(sum(extinct), n())$conf.int[2],
+      .groups = "drop"
+    ) %>%
+    mutate(
+      outbreak_prob = 1 - extinction_prob,
+      outbreak_lower_ci = 1 - upper_ci,
+      outbreak_upper_ci = 1 - lower_ci
+    )
+}
+
+# Function to plot outbreak probability
+plot_outbreak_probability <- function(data, color_palette) {
+  ggplot(data, aes(x = day, y = outbreak_prob, colour = scenario)) +
+    geom_step()+
+    geom_ribbon(aes(ymin = outbreak_lower_ci, ymax = outbreak_upper_ci, fill = scenario), alpha = 0.2, colour = NA) +
+    scale_fill_brewer(palette = color_palette) +
+    facet_grid(R ~ size+scenario) +
+    labs(x = "Scenario", y = "Probability", title = "Probability of Outbreak (1 - Extinction Probability)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "bottom")
 }
