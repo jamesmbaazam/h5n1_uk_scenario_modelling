@@ -1,128 +1,185 @@
-# Load required libraries
-library(tidyverse)
-library(purrr)
-library(gridExtra)
-library(fitdistrplus)
-library(tictoc)
-library(patchwork)
 
-# Set seed for reproducibility
+#############################
+# Initialize Simulation
+#############################
+
+# Set random seed for reproducibility
 set.seed(123)
 
-# Define simulation parameters
-n_chains <- 10000 
-tmax <- 1000
-daily_flight_probability <- 0.025 # 
-
-# Define all scenarios in one list
-scenarios <- list(
-  list(name = "A. No testing", pre = 0, post = 0, pre_delay = NA, post_delay = NA, flight_duration = 0.2, quarantine_start_day = Inf),
-  list(name = "B. Pre-flight (1 day before)", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 50),
-  list(name = "C. Post-flight (1 day after)", pre = 0, post = 1, pre_delay = NA, post_delay = 1, flight_duration = 0.2, quarantine_start_day = 50),
-  list(name = "D. Both (1 day before and after)", pre = 1, post = 1, pre_delay = 1, post_delay = 1, flight_duration = 0.2, quarantine_start_day = 50),
-  list(name = "E. Pre-flight testing (Day 50)", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 50),
-  list(name = "F. Pre-flight testing (Day 100)", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 100)
+# Define core simulation parameters
+sim_params <- list(
+  n_chains = 10000,
+  tmax = 1000,
+  stat_threshold = 12
 )
 
-# Define all scenarios in one list
-scenarios <- list(
-  list(name = "A. No testing", pre = 0, post = 0, pre_delay = NA, post_delay = NA, flight_duration = 0.2, quarantine_start_day = Inf),
-  list(name = "B. Pre-flight Day 0", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 0),
-  list(name = "C. Pre-flight Day 25", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 25),
-  list(name = "D. Pre-flight Day 50", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 50),
-  list(name = "E. Pre-flight Day 75", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 75),
-  list(name = "F. Pre-flight Day 100", pre = 1, post = 0, pre_delay = 1, post_delay = NA, flight_duration = 0.2, quarantine_start_day = 100)
+# Define constant sensitivity function
+sensitivity_function <- function(x) {
+  return(0.4)
+}
+
+#############################
+# Calculate Flight Probability
+#############################
+
+# Source data from official statistics
+flight_stats <- list(
+  # IPS ONS survey: https://www.visitbritain.org/research-insights/inbound-visits-and-spend-annual-uk
+  us_uk_visitors_23 = 5122000,
+  
+  # US Census Bureau: https://www.census.gov/library/stories/2022/12/happy-new-year-2023.html
+  us_population = 334233854
 )
 
-# Create a data frame with all combinations of R values and size parameters
+# Calculate daily probability of US->UK flight
+daily_flight_probability <- (flight_stats$us_uk_visitors_23 / flight_stats$us_population) / 365
+
+#############################
+# Setup Model Parameters
+#############################
+
+# Define transmission parameters
 simulation_params <- expand_grid(
-  R = c(2),
-  size = c(0.1)
+  R = c(1.5,2),
+  k = c(0.1,1000)
 ) %>% 
   mutate(R_k_id = row_number())
 
-# Generate initial chains
-initial_chains <- generate_initial_chains(simulation_params, n_chains = n_chains, stat_threshold = 15)
+# Generate initial branching process chains
+initial_chains <- generate_initial_chains(
+  simulation_params, 
+  n_chains = sim_params$n_chains, 
+  stat_threshold = sim_params$stat_threshold,
+  tmax = sim_params$tmax
+)
 
-
-# First, initialize flight chains once for all scenarios
+# Initialize flight chains
 tic()
-initial_flight_chains <- initialize_flight_chains(initial_chains$initial_chain[[1]], daily_flight_probability, si_draws)
+# Create processing directory if it doesn't exist
+if (!dir.exists("processing")) {
+  dir.create("processing")
+}
+
+# Set overwrite flag for cache control
+overwrite <- TRUE  # Change to TRUE to force regeneration of flight chains
+
+# Process each R and k combination
+all_flight_chains <- list()
+n_flying_chains <- numeric(nrow(simulation_params))
+
+for(param_idx in 1:nrow(simulation_params)) {
+  # Define the cache file path for this parameter combination
+  flight_chains_cache <- sprintf("processing/initial_flight_chains_R%.1f_k%.1f.qs", 
+                               simulation_params$R[param_idx],
+                               simulation_params$k[param_idx])
+  
+  # Load or generate flight chains for this parameter set
+  if (file.exists(flight_chains_cache) && !overwrite) {
+    message(sprintf("Loading cached flight chains for R=%.1f, k=%.1f...",
+                   simulation_params$R[param_idx],
+                   simulation_params$k[param_idx]))
+    initial_flight_chains <- qs::qread(flight_chains_cache)
+  } else {
+    message(sprintf("Generating new flight chains for R=%.1f, k=%.1f...",
+                   simulation_params$R[param_idx],
+                   simulation_params$k[param_idx]))
+    initial_flight_chains <- initialize_flight_chains(
+      initial_chains$initial_chain[[param_idx]], 
+      daily_flight_probability, 
+      si_draws,
+      tmax = sim_params$tmax
+    )
+    
+    # Save the flight chains
+    qs::qsave(initial_flight_chains, flight_chains_cache)
+    message("Saved flight chains to cache.")
+  }
+  
+  # Store the flight chains
+  all_flight_chains[[param_idx]] <- initial_flight_chains
+  
+  # Calculate number of unique chains that would fly for this parameter set
+  n_flying_chains[param_idx] <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    n_distinct()
+  
+  message(sprintf("Found %d unique flying chains for R=%.1f, k=%.1f", 
+                 n_flying_chains[param_idx],
+                 simulation_params$R[param_idx],
+                 simulation_params$k[param_idx]))
+}
+
 toc()
 
+#############################
+# Define Intervention Scenarios
+#############################
+
+# Common parameters across scenarios
+base_scenario <- list(
+  pre = 1,
+  post = 0,
+  pre_delay = 1,
+  post_delay = NA,
+  flight_duration = 0.2,
+  quarantine_duration = 14
+)
+
+# Define scenarios with different intervention start times
+intervention_days <- c(0, 25, 50, 75, 100)
+scenarios <- lapply(seq_along(intervention_days), function(i) {
+  c(
+    base_scenario,
+    list(
+      name = sprintf("%s. Pre-flight Day %d", LETTERS[i+1], intervention_days[i]),
+      interventions_enacted = intervention_days[i]
+    )
+  )
+})
+
+#############################
+# Run Scenarios
+#############################
+
+# Process each scenario
 tic()
-# Process scenarios one at a time and combine results
 all_results <- list()
 
 for (scenario_idx in seq_along(scenarios)) {
-  current_scenario <- list(scenarios[[scenario_idx]])
+  # Get current scenario
+  current_scenario <- scenarios[[scenario_idx]]
   
-  # Process single scenario for each chain
   scenario_results <- list()
-  for (chain_idx in seq_len(nrow(initial_chains))) {
-    chain_result <- run_scenarios_on_chains(
-      initial_flight_chains,  # Use the pre-initialized flight chains
-      current_scenario, 
-      daily_flight_probability, 
-      si_draws
-    )
-    
-    # Add the R and size values from initial_chains
-    chain_result <- chain_result %>%
+  
+  # Process each parameter combination
+  for(param_idx in 1:nrow(simulation_params)) {
+    # Process scenario for this parameter set
+    param_results <- process_scenario(
+      all_flight_chains[[param_idx]],
+      current_scenario,
+      quarantine_duration = current_scenario$quarantine_duration,
+      tmax = sim_params$tmax
+    ) %>%
+      # Add transmission parameters and flying chains count
       mutate(
-        R = initial_chains$R[chain_idx],
-        size = initial_chains$size[chain_idx]
+        R = simulation_params$R[param_idx],
+        k = simulation_params$k[param_idx],
+        total_flying_chains = n_flying_chains[param_idx]
       )
     
-    scenario_results[[chain_idx]] <- chain_result
+    scenario_results[[param_idx]] <- param_results
   }
   
-  # Combine results for this scenario
-  scenario_results <- bind_rows(scenario_results)
-  
-  # Store results
-  all_results[[scenario_idx]] <- scenario_results
+  # Combine results for all parameter sets
+  all_results[[scenario_idx]] <- bind_rows(scenario_results)
   
   # Print progress
-  print(paste("Completed scenario", LETTERS[scenario_idx], "-", scenarios[[scenario_idx]]$name))
-  
-  # Clear intermediate objects
-  rm(scenario_results, chain_result)
-  gc()
+  print(sprintf("Completed scenario %s - %s", 
+                LETTERS[scenario_idx+1], 
+                current_scenario$name))
 }
 
-# Combine all results
+# Combine results from all scenarios
 all_results <- bind_rows(all_results)
 toc()
-
-# Create plots using combined results
-p_daily <- plot_daily_cases(all_results, "Set1")
-p_cumulative <- plot_cumulative_cases(all_results, "Set1")
-p_avg_cumulative <- plot_avg_cumulative_cases(all_results, "Set1")
-
-# Save individual plots
-ggsave("results/daily_cases.png", p_daily, width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/daily_cases.pdf", p_daily, width = 12, height = 8, bg = "white", dpi = 600)
-
-ggsave("results/cumulative_cases.png", p_cumulative, width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/cumulative_cases.pdf", p_cumulative, width = 12, height = 8, bg = "white", dpi = 600)
-
-ggsave("results/avg_cumulative_cases.png", p_avg_cumulative, width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/avg_cumulative_cases.pdf", p_avg_cumulative, width = 12, height = 8, bg = "white", dpi = 600)
-
-# Calculate and plot additional metrics
-time_to_100_cases <- calculate_time_to_100_cases(all_results)
-outbreak_prob <- calculate_extinction_probability(all_results)
-
-p_time_to_100 <- plot_time_to_100_cases(time_to_100_cases, "Set1")
-p_outbreak_prob <- plot_outbreak_probability(outbreak_prob, "Set1")
-
-# Save additional plots
-ggsave("results/time_to_100_cases.png", p_time_to_100, width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/time_to_100_cases.pdf", p_time_to_100, width = 12, height = 8, bg = "white", dpi = 600)
-
-ggsave("results/outbreak_probability.png", p_outbreak_prob, width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/outbreak_probability.pdf", p_outbreak_prob, width = 12, height = 8, bg = "white", dpi = 600)
-
-print("Simulation and visualization complete. Check the results directory for output files.")
-

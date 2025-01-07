@@ -1,359 +1,640 @@
-# Modified initialize_flight_chains function
-initialize_flight_chains <- function(chain_data, daily_flight_probability, si_draws) {
-  
-  # Get unique chains
-  unique_chains <- unique(chain_data$chain)
-  n_unique_chains <- length(unique_chains)
-  
-  # First, randomly assign flight status to all chains
-  chain_flight_status <- tibble(
-    chain = unique_chains,
-    will_fly_chain = rbinom(n_unique_chains, 1, daily_flight_probability) == 1 
-  )
-  
-  # Filter chains first based on flight status
-  filtered_chains <- chain_data %>%
-    left_join(chain_flight_status, by = "chain") %>%
-    filter(will_fly_chain) %>%
-    select(-will_fly_chain)
-  
-  # Then process only the filtered chains
-  results <- filtered_chains %>%
-    mutate(
-      flight_time = time + sample(x = si_draws$y_rep, size = n(), replace = TRUE),
-      will_fly = TRUE,  # All remaining chains will fly
-      flight_time = flight_time  # No need for if_else anymore
-    ) %>% 
-    arrange(chain, time)
-  
-  # Add ancestry column
-  results <- add_ancestry_column(results)
-  
-  # Add indicator for infections in destination country
-  results <- results %>%
-    group_by(chain) %>%
-    mutate(
-      flown_ancestors = list(infectee),  # All infectees in remaining chains will fly
-      destination_infection = map_lgl(ancestry, ~TRUE)  # All infections in remaining chains are destination infections
-    ) %>%
-    ungroup() %>%
-    select(-flown_ancestors)
-  
-  return(results)
-}
-
 # Modified generate_initial_chains function
-generate_initial_chains <- function(simulation_params, n_chains, stat_threshold) {
+generate_initial_chains <- function(simulation_params, n_chains, stat_threshold, tmax) {
+  # Convert to data.table and ensure copy
+  dt <- data.table::as.data.table(simulation_params)
+  data.table::setDT(dt)  # Ensure it's a data.table
   
-  simulation_params %>%
-    mutate(
-      initial_chain = map(R_k_id, ~ simulate_chains(
-        n_chains = n_chains,
-        statistic = "length",
-        offspring_dist = function(n, mu) rnbinom(n, mu = 1.5, size = 0.1),
-        stat_threshold = stat_threshold,
-        generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
-        tf = tmax
-      ))
+  # Create list to store chains
+  chain_list <- vector("list", nrow(dt))
+  
+  # Generate chains for each parameter combination
+  for(i in seq_len(nrow(dt))) {
+    current_R <- dt$R[i]
+    current_k <- dt$k[i]
+    
+    chain_list[[i]] <- simulate_chains(
+      n_chains = n_chains,
+      statistic = "length",
+      offspring_dist = function(n, mu) {
+        rnbinom(n, mu = current_R, size = current_k)
+      },
+      stat_threshold = stat_threshold,
+      generation_time = function(n) sample(x = si_draws$y_rep, size = n, replace = TRUE),
+      tf = tmax
     )
+  }
+  
+  # Add chains to data.table
+  dt[, initial_chain := chain_list]
+  
+  # Convert back to data.frame if needed
+  return(as.data.frame(dt))
 }
 
-# Updated flight_test_fun to include flight_duration
-flight_test_fun <- function(flying_chains, test_before_flight, test_after_flight, pre_flight_test_delay, post_flight_test_delay, flight_duration, quarantine_start_day) {
+initialize_flight_chains <- function(chain_data, daily_flight_probability, si_draws, tmax) {
+  message("Initializing flight chains...")
+  dt <- data.table::as.data.table(chain_data)
+  n_cases <- nrow(dt)
+  message(sprintf("Processing %d cases", n_cases))
   
-  # Add flight_end based on scenario-specific flight_duration
-  flying_chains <- flying_chains %>%
-    mutate(
-      flight_end = flight_time + flight_duration,
-      apply_quarantine = will_fly & (flight_time >= quarantine_start_day)
-    )
+  # Initial flight assignments
+  dt[, will_fly := rbinom(n_cases, 1, daily_flight_probability) == 1]
+  n_flyers <- sum(dt$will_fly)
+  message(sprintf("Identified %d potential flyers (%.1f%%)", n_flyers, 100*n_flyers/n_cases))
   
-  # Implement pre-flight testing (if applicable)
-  if (test_before_flight == 1) {
-    flying_chains <- flying_chains %>%
-      mutate(
-        pre_flight_test_time = if_else(apply_quarantine, flight_time - pre_flight_test_delay, Inf),
-        time_since_infection_at_pre_test = pmax(0, pre_flight_test_time - time),
-        pre_flight_test_sensitivity = map_dbl(time_since_infection_at_pre_test, sensitivity_function),
-        pre_flight_test_result = rbinom(n(), 1, pre_flight_test_sensitivity),
-        isolated_pre_flight = pre_flight_test_result == 1
-      )
+  # Exit if no flights
+  if(!any(dt$will_fly)) {
+    message("No flights found, returning empty dataset")
+    return(list(
+      data = data.table(
+        chain = integer(0),
+        infectee = integer(0),
+        will_fly = logical(0),
+        time = numeric(0),
+        flight_time = numeric(0),
+        flight_end = numeric(0)
+      ),
+      n_flying_chains = 0
+    ))
+  }
+  
+  # Extract potential flyers
+  flyers <- dt[will_fly == TRUE]
+  
+  # For each flyer, trace back to find if they have flying ancestors
+  setkey(dt, chain, infectee)
+  flyers[, is_first_flight := TRUE]
+  
+  for(i in 1:nrow(flyers)) {
+    if(i %% 10 == 0) message(sprintf("Processing flyer %d of %d", i, nrow(flyers)))
+    
+    current_chain <- flyers[i, chain]
+    current_case <- flyers[i, infectee]
+    
+    # Trace back until we find a flying ancestor or hit root
+    while(!is.na(dt[.(current_chain, current_case), infector])) {
+      current_case <- dt[.(current_chain, current_case), infector]
+      if(dt[.(current_chain, current_case), will_fly]) {
+        flyers[i, is_first_flight := FALSE]
+        break
+      }
+    }
+  }
+  
+  # Keep only first flyers and set their flight times
+  first_flyers <- flyers[is_first_flight == TRUE]
+  first_flyers[, ':='(
+    flight_time = time + sample(si_draws$y_rep, .N, replace = TRUE),
+    flight_end = time + sample(si_draws$y_rep, .N, replace = TRUE) + 0.2
+  )]
+  
+  message(sprintf("Found %d first flyers", nrow(first_flyers)))
+  
+  # Create index of cases to keep
+  keep_idx <- vector("logical", nrow(dt))
+  
+  # Process each first flyer separately
+  for(i in 1:nrow(first_flyers)) {
+    current_chain <- first_flyers[i, chain]
+    flyer_id <- first_flyers[i, infectee]
+    
+    # Mark flyer
+    keep_idx[dt[.(current_chain, flyer_id), which = TRUE]] <- TRUE
+    
+    # Mark all descendants
+    current_ids <- flyer_id
+    while(length(current_ids) > 0) {
+      # Find next generation
+      descendant_rows <- dt[chain == current_chain & infector %in% current_ids, which = TRUE]
+      if(length(descendant_rows) == 0) break
+      
+      # Mark these descendants
+      keep_idx[descendant_rows] <- TRUE
+      
+      # Move to next generation
+      current_ids <- dt[descendant_rows, infectee]
+    }
+  }
+  
+  # Keep marked cases
+  result <- dt[keep_idx]
+  
+  # Add flight times from first flyers
+  result[, flight_time := NA_real_]
+  result[, flight_end := NA_real_]
+  
+  # Update flight times for each chain
+  for(i in 1:nrow(first_flyers)) {
+    current_chain <- first_flyers[i, chain]
+    result[chain == current_chain, ':='(
+      flight_time = first_flyers[i, flight_time],
+      flight_end = first_flyers[i, flight_end]
+    )]
+  }
+  
+  # Calculate destination infections
+  result[, destination_infection := time > flight_end]
+  
+  # Sort
+  setorder(result, chain, generation, time)
+  
+  return(result)
+}
+
+process_scenario <- function(flying_chains, scenario, quarantine_duration = 14, tmax) {
+  message("Processing scenario: ", scenario$name)
+  
+  # Convert to data.table if not already
+  dt <- if(data.table::is.data.table(flying_chains)) {
+    data.table::copy(flying_chains)
   } else {
-    flying_chains <- flying_chains %>%
-      mutate(
-        pre_flight_test_time = Inf,
-        pre_flight_test_result = 0,
-        isolated_pre_flight = FALSE
-      )
+    data.table::as.data.table(flying_chains)
   }
   
-  # Implement post-flight testing (if applicable)
-  if (test_after_flight == 1) {
-    flying_chains <- flying_chains %>%
-      mutate(
-        post_flight_test_time = if_else(apply_quarantine, flight_end + post_flight_test_delay, Inf),
-        time_since_infection_at_post_test = pmax(0, post_flight_test_time - time),
-        post_flight_test_sensitivity = map_dbl(time_since_infection_at_post_test, sensitivity_function),
-        post_flight_test_result = rbinom(n(), 1, post_flight_test_sensitivity),
-        isolated_post_flight = post_flight_test_result == 1
-      )
-  } else {
-    flying_chains <- flying_chains %>%
-      mutate(
-        post_flight_test_time = Inf,
-        post_flight_test_result = 0,
-        isolated_post_flight = FALSE
-      )
+  # Print column names for debugging
+  message("Available columns: ", paste(names(dt), collapse = ", "))
+  
+  # Check if required columns exist
+  required_cols <- c("chain", "infectee", "will_fly", "time", "flight_time", "flight_end")
+  missing_cols <- setdiff(required_cols, names(dt))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
   }
   
-  # Determine the earliest isolation time for each individual
-  flying_chains <- flying_chains %>%
-    mutate(
-      isolation_time = pmin(
-        if_else(isolated_pre_flight, pre_flight_test_time, Inf),
-        if_else(isolated_post_flight, post_flight_test_time, Inf)
-      )
-    )
+  # Set key after ensuring columns exist
+  data.table::setkey(dt, chain, infectee)
   
-  # Identify isolated individuals
-  isolated_individuals <- flying_chains %>%
-    filter(isolation_time < Inf) %>%
-    select(chain, infectee, isolation_time)
+  # Extract flyers only
+  flyers <- dt[will_fly == TRUE]
+  message(sprintf("Processing %d flyers", nrow(flyers)))
   
-  # Prune chains based on isolated ancestors
-  pruned_chains <- flying_chains %>%
-    mutate(
-      should_remove = map_lgl(seq_len(n()), function(i) {
-        any(isolated_individuals$infectee %in% ancestry[[i]] &
-              isolated_individuals$isolation_time < time[i] &
-              isolated_individuals$chain == chain[i])
-      })
-    ) %>%
-    filter(!should_remove) %>%
-    select(-should_remove)
+  # Process flyers first
+  flyers[, ':='(
+    original_flight_time = flight_time,
+    original_flight_end = flight_end,
+    interventions_active = time >= scenario$interventions_enacted,
+    pre_flight_test_time = Inf,
+    post_flight_test_time = Inf,
+    isolation_time = Inf,
+    quarantine_end = Inf,
+    prevented_flight = FALSE
+  )]
   
-  # Apply the effects of isolation
-  final_chains <- pruned_chains %>%
-    mutate(
-      prevented_flight = isolated_pre_flight & will_fly,
-      will_fly = will_fly & !prevented_flight,
-      flight_time = if_else(prevented_flight, Inf, flight_time),
-      flight_end = if_else(prevented_flight, Inf, flight_end)
-    )
-  
-  return(final_chains)
-}
-
-# Updated run_scenarios_on_chains function
-run_scenarios_on_chains <- function(flying_chains, scenarios, daily_flight_probability, si_draws) {
-  # Run scenarios directly on the pre-initialized flight chains
-  res <- map(scenarios, ~list(
-    scenario = .$name,
-    chains = flight_test_fun(flying_chains, .$pre, .$post, .$pre_delay, .$post_delay, .$flight_duration, .$quarantine_start_day)
-  ))
-  
-  # Convert to data.frame
-  map_df(res, ~ .x$chains %>% 
-           mutate(scenario = .x$scenario) %>%
-           select(scenario, everything()))
-}
-
-
-
-# Modified function to generate ancestry vector for an individual, considering chain
-get_ancestry <- function(individual, chain, chain_data) {
-  ancestry <- c()
-  current <- individual
-  current_chain <- chain
-  while (TRUE) {
-    ancestor_row <- chain_data[chain_data$infectee == current & chain_data$chain == current_chain, ]
-    if (nrow(ancestor_row) == 0 || is.na(ancestor_row$infector)) break
-    infector <- ancestor_row$infector
-    ancestry <- c(ancestry, infector)
-    current <- infector
+  # Pre-flight testing (only for flyers)
+  if(scenario$pre == 1) {
+    message("Applying pre-flight testing")
+    flyers[interventions_active == TRUE, ':='(
+      pre_flight_test_time = pmax(0, original_flight_time - scenario$pre_delay),
+      time_since_infection_pre = pmax(0, pre_flight_test_time - time)
+    )]
+    
+    # Calculate test sensitivity
+    flyers[interventions_active == TRUE, 
+           pre_flight_test_sensitivity := sensitivity_function(time_since_infection_pre)]
+    
+    # Generate test results
+    flyers[interventions_active == TRUE, ':='(
+      pre_flight_test_result = rbinom(.N, 1, 
+                                    pmin(1, pmax(0, pre_flight_test_sensitivity)))
+    )]
+    
+    # Mark prevented flights
+    flyers[interventions_active == TRUE & pre_flight_test_result == 1, 
+           prevented_flight := TRUE]
   }
-  return(rev(ancestry))  # Reverse to get oldest ancestor first
-}
-
-# Add ancestry column to the data frame
-add_ancestry_column <- function(chain_data) {
-  chain_data %>%
-    rowwise() %>%
-    mutate(ancestry = list(get_ancestry(infectee, chain, chain_data))) %>%
-    ungroup()
-}
-
-# Function to prune the chain based on an isolated ancestor
-prune_chain <- function(chain_data, isolated_ancestor) {
-  chain_data %>%
-    filter(!map_lgl(ancestry, ~isolated_ancestor %in% .))
+  
+  # Post-flight testing (only for non-prevented flights)
+  if(scenario$post == 1) {
+    message("Applying post-flight testing")
+    flyers[interventions_active == TRUE & prevented_flight == FALSE, ':='(
+      post_flight_test_time = pmax(0, original_flight_end + scenario$post_delay),
+      time_since_infection_post = pmax(0, post_flight_test_time - time)
+    )]
+    
+    # Calculate test sensitivity
+    flyers[interventions_active == TRUE & prevented_flight == FALSE,
+           post_flight_test_sensitivity := sensitivity_function(time_since_infection_post)]
+    
+    # Generate test results
+    flyers[interventions_active == TRUE & prevented_flight == FALSE, ':='(
+      post_flight_test_result = rbinom(.N, 1, 
+                                     pmin(1, pmax(0, post_flight_test_sensitivity)))
+    )]
+    
+    # Set quarantine periods for positive tests
+    flyers[interventions_active == TRUE & 
+           prevented_flight == FALSE & 
+           post_flight_test_result == 1,
+           quarantine_end := post_flight_test_time + quarantine_duration]
+  }
+  
+  # Update flight status for flyers
+  flyers[prevented_flight == TRUE, ':='(
+    will_fly = FALSE,
+    flight_time = Inf,
+    flight_end = Inf
+  )]
+  
+  # Create index of cases to keep
+  keep_idx <- vector("logical", nrow(dt))
+  
+  # Process each non-prevented flyer
+  message("Processing descendants")
+  active_flyers <- flyers[prevented_flight == FALSE]
+  
+  # Process descendants
+  for(i in 1:nrow(active_flyers)) {
+    if(i %% 100 == 0) message(sprintf("Processing flyer %d of %d", i, nrow(active_flyers)))
+    
+    current_chain <- active_flyers[i, chain]
+    flyer_id <- active_flyers[i, infectee]
+    
+    # Mark flyer using direct index
+    matching_rows <- dt[.(current_chain, flyer_id), which = TRUE]
+    keep_idx[matching_rows] <- TRUE
+    
+    # Mark all descendants
+    current_ids <- flyer_id
+    while(length(current_ids) > 0) {
+      # Find next generation
+      descendant_idx <- dt[chain == current_chain & infector %in% current_ids, which = TRUE]
+      if(length(descendant_idx) == 0) break
+      
+      # Mark these descendants
+      keep_idx[descendant_idx] <- TRUE
+      
+      # Move to next generation
+      current_ids <- dt[descendant_idx, infectee]
+    }
+  }
+  
+  # Keep marked cases
+  result <- dt[keep_idx]
+  
+  # Join flight and quarantine information from flyers
+  result[, ':='(
+    flight_time = NA_real_,
+    flight_end = NA_real_,
+    quarantine_end = Inf
+  )]
+  
+  # Update information for each chain
+  setkey(active_flyers, chain)  # Set key for active_flyers
+  for(i in 1:nrow(active_flyers)) {
+    current_chain <- active_flyers[i, chain]
+    result[chain == current_chain, ':='(
+      flight_time = active_flyers[i, flight_time],
+      flight_end = active_flyers[i, flight_end],
+      quarantine_end = active_flyers[i, quarantine_end]
+    )]
+  }
+  
+ # Calculate destination infections
+  result[, ':='(
+    destination_infection = 
+      !is.na(flight_end) & 
+      time > flight_end & 
+      (time < quarantine_end | quarantine_end == Inf),
+    scenario = scenario$name  # Add scenario name here
+  )]
+  
+   # Sort
+  setorder(result, chain, generation, time)
+  
+  message(sprintf("Final dataset has %d cases", nrow(result)))
+  return(as.data.frame(result))
 }
 
 ##### Plotting functions #####
 # Function to create daily cases plot
-plot_daily_cases <- function(data, color_palette) {
+plot_daily_cases <- function(data, initial_flight_chains, color_palette) {
+  # Get all chains that would have flown in baseline
+  flying_chains <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    unique()
+  
+  total_flying_chains <- length(flying_chains)
+  
   data %>% 
     filter(destination_infection) %>% 
     mutate(day = floor(time)) %>%
-    group_by(scenario, R, size, chain, day) %>%
+    group_by(scenario, R, k, chain, day) %>%
     summarise(n = n(), .groups = "drop") %>%
+    complete(
+      day = 0:max(floor(data$time), na.rm = TRUE),
+      nesting(scenario, R, k),
+      chain = flying_chains,
+      fill = list(n = 0)
+    ) %>%
     ggplot(aes(x = day, y = n, color = scenario, group = interaction(chain, scenario))) +
-    geom_line(alpha = 0.2) +
+    geom_line(alpha = 0.5) +
     scale_colour_brewer(palette = color_palette) +
-    facet_grid(R ~ size) +
-    labs(x = "Day", y = "Daily Cases", title = "Daily Cases by Scenario") +
+    facet_grid(R ~ k) +
+    labs(x = "Day", 
+         y = "Daily Cases", 
+         title = "Daily Cases by Scenario",
+         subtitle = sprintf("Based on %d possible flying chains", total_flying_chains)) +
     theme_minimal() +
     theme(legend.position = "bottom")
 }
 
 # Function to create cumulative cases plot
-plot_cumulative_cases <- function(data, color_palette) {
+plot_cumulative_cases <- function(data, initial_flight_chains, color_palette) {
+  # Get all chains that would have flown in baseline
+  flying_chains <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    unique()
+  
+  total_flying_chains <- length(flying_chains)
+  
   data %>% 
+    filter(destination_infection) %>% 
     mutate(day = floor(time)) %>%
-    group_by(scenario, R, size, chain, day) %>%
+    group_by(scenario, R, k, chain, day) %>%
     summarise(n = n(), .groups = "drop") %>%
-    complete(day = 0:1000, scenario, R, size, chain, fill = list(n = 0)) %>%
-    group_by(scenario, R, size, chain) %>%
-    mutate(cumsum_n = cumsum(n)) %>% 
+    complete(
+      day = 0:max(floor(data$time), na.rm = TRUE),
+      nesting(scenario, R, k),
+      chain = flying_chains,
+      fill = list(n = 0)
+    ) %>%
+    group_by(scenario, R, k, chain) %>%
+    mutate(cumsum_n = cumsum(n)) %>%
     ggplot(aes(x = day, y = cumsum_n, group = interaction(chain, scenario), colour = scenario)) +
     geom_line(alpha = 0.2) +
     scale_colour_brewer(palette = color_palette) +
-    facet_grid(R ~ size) +
-    labs(x = "Day", y = "Cumulative Cases", title = "Cumulative Cases by Scenario") +
+    facet_grid(R ~ k) +
+    labs(x = "Day", 
+         y = "Cumulative Cases", 
+         title = "Cumulative Cases by Scenario",
+         subtitle = sprintf("Based on %d possible flying chains", total_flying_chains)) +
     theme_minimal() +
     theme(legend.position = "bottom")
 }
 
 # Function to create average cumulative cases plot
-plot_avg_cumulative_cases <- function(data, color_palette) {
+plot_avg_cumulative_cases <- function(data, initial_flight_chains, color_palette) {
+  # Get all chains that would have flown in baseline
+  flying_chains <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    unique()
+  
+  total_flying_chains <- length(flying_chains)
+  
   avg_data <- data %>%
+    filter(destination_infection) %>% 
     mutate(day = floor(time)) %>%
-    group_by(scenario, R, size, chain, day) %>%
+    group_by(scenario, R, k, chain, day) %>%
     summarise(n = n(), .groups = "drop") %>%
-    complete(day = 0:1000, scenario, R, size, chain, fill = list(n = 0)) %>%
-    group_by(scenario, R, size, chain) %>%
+    # Complete with ALL chains that would have flown in baseline
+    complete(
+      day = 0:max(floor(data$time), na.rm = TRUE),
+      nesting(scenario, R, k),
+      chain = flying_chains,
+      fill = list(n = 0)  # Chains prevented from flying will have zero cases
+    ) %>%
+    group_by(scenario, R, k, chain) %>%
     mutate(cumsum_n = cumsum(n)) %>%
-    group_by(scenario, R, size, day) %>%
-    summarise(avg_cumsum = mean(cumsum_n),
-              low_ci = quantile(cumsum_n, 0.025),
-              high_ci = quantile(cumsum_n, 0.975),
-              .groups = "drop")
+    group_by(scenario, R, k, day) %>%
+    summarise(
+      avg_cumsum = mean(cumsum_n),
+      low_ci = quantile(cumsum_n, 0.025),
+      high_ci = quantile(cumsum_n, 0.975),
+      .groups = "drop"
+    )
   
   ggplot(avg_data, aes(x = day, y = avg_cumsum, color = scenario)) +
     geom_line() +
     #geom_ribbon(aes(ymin = low_ci, ymax = high_ci, fill = scenario), alpha = 0.2, colour = NA) +
     scale_colour_brewer(palette = color_palette) +
     scale_fill_brewer(palette = color_palette) +
-    facet_grid(R ~ size) +
-    labs(x = "Day", y = "Average Cumulative Cases", title = "Average Cumulative Cases by Scenario") +
+    facet_grid(R ~ k) +
+    labs(x = "Day", 
+         y = "Average Cumulative Cases", 
+         title = "Average Cumulative Cases by Scenario",
+         subtitle = sprintf("Based on %d possible flying chains", total_flying_chains)) +
     theme_minimal() +
     theme(legend.position = "bottom")
 }
 
-# Function to calculate time to reach 100 cases with uncertainty
-calculate_time_to_100_cases <- function(data) {
-  # Function to calculate day of 100 cases for a chain
-  calc_day_100 <- function(chain_data) {
-    result <- chain_data %>%
-      filter(destination_infection) %>%
-      mutate(day = floor(time)) %>%
-      group_by(day) %>%
-      summarise(daily_cases = n(), .groups = "drop") %>%
-      arrange(day) %>%
-      mutate(cumulative_cases = cumsum(daily_cases)) %>%
-      filter(cumulative_cases >= 100) %>%
-      slice_min(day, n = 1) %>%
-      pull(day)
-    
-    # Return NA if no day reaches 100 cases
-    if (length(result) == 0) return(NA)
-    return(result)
-  }
+# Function to calculate time to reach N cumulative cases using survival analysis
+calculate_time_to_n_cases <- function(data, initial_flight_chains, n_cases = 10) {
+  require(survival)
   
-  # Calculate days to 100 cases for each chain
-  results <- data %>%
-    group_by(scenario, R, size, chain) %>%
-    nest() %>%
-    mutate(day_100 = map_dbl(data, ~calc_day_100(.))) %>%
-    group_by(scenario, R, size) %>%
+  # Get all chains that would have flown in baseline
+  flying_chains <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    unique()
+  
+  total_flying_chains <- length(flying_chains)
+  
+  # Calculate time to threshold for each chain
+  time_to_threshold <- data %>%
+    filter(destination_infection) %>%
+    mutate(day = floor(time)) %>%
+    group_by(scenario, R, k, chain, day) %>%
+    summarise(daily_cases = n(), .groups = "drop") %>%
+    # Complete with ALL chains that would have flown in baseline
+    tidyr::complete(
+      day = 0:max(floor(data$time), na.rm = TRUE),
+      tidyr::nesting(scenario, R, k),
+      chain = flying_chains,
+      fill = list(daily_cases = 0)
+    ) %>%
+    group_by(scenario, R, k, chain) %>%
+    arrange(day) %>%
+    mutate(cum_cases = cumsum(daily_cases)) %>%
     summarise(
-      actual_results = median(day_100, na.rm = TRUE),
-      lower_ci = quantile(day_100, probs = 0.025, na.rm = TRUE),
-      upper_ci = quantile(day_100, probs = 0.975, na.rm = TRUE),
-      n_chains_reached_100 = sum(!is.na(day_100)),
-      total_chains = n(),
+      time = if(max(cum_cases) >= n_cases) {
+        as.numeric(min(day[cum_cases >= n_cases]))
+      } else {
+        as.numeric(max(day))
+      },
+      status = max(cum_cases) >= n_cases,
       .groups = "drop"
     )
   
-  # Calculate actual cumulative cases on the median day
-  results <- results %>%
-    rowwise() %>%
-    mutate(
-      cumulative_cases = data %>%
-        filter(destination_infection) %>%
-        mutate(day = floor(time)) %>%
-        filter(day <= actual_results) %>%
-        nrow()
-    )
-  
-  return(results)
-}
-
-# Update the plotting function to show proportion of chains reaching 100 cases
-plot_time_to_100_cases <- function(data, color_palette) {
-  ggplot(data, aes(x = scenario, y = actual_results, colour = scenario)) +
-    geom_pointrange(aes(ymin = lower_ci, ymax = upper_ci), size = 1) +
-    geom_text(aes(label = sprintf("Day %d\n(%d cases)\n[CI: %d-%d]\n%d/%d chains", 
-                                 round(actual_results), 
-                                 cumulative_cases,
-                                 round(lower_ci),
-                                 round(upper_ci),
-                                 n_chains_reached_100,
-                                 total_chains)), 
-              vjust = -0.5, size = 3) +
-    scale_colour_brewer(palette = color_palette) +
-    facet_grid(R ~ size) +
-    labs(x = "Scenario", 
-         y = "Time (days)", 
-         title = "Time to Reach 100 Total Cumulative Cases",
-         subtitle = "Points show median day, error bars show 95% quantiles across chains") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-}
-
-# Function to calculate extinction probability
-calculate_extinction_probability <- function(data) {
-  
-  data %>%
-    mutate(day  = floor(time)) %>%
-    group_by(scenario, R, size, chain, day) %>%
-    summarise(n = n(),
-              extinct = n == 0,
-              .groups = "drop") %>%
-    group_by(scenario, R, size, day) %>%
+  # Calculate survival statistics for each scenario/R/k combination
+  results <- time_to_threshold %>%
+    group_by(scenario, R, k) %>%
     summarise(
-      extinction_prob = mean(extinct),
-      lower_ci = binom.test(sum(extinct), n())$conf.int[1],
-      upper_ci = binom.test(sum(extinct), n())$conf.int[2],
+      n_chains_reached_threshold = sum(status),
+      total_flying_chains = n(),
+      proportion_reached = mean(status),
+      cumulative_cases_threshold = n_cases,
+      mean_time = mean(time[status], na.rm = TRUE),
+      median_time = median(time[status], na.rm = TRUE),
+      sd_time = sd(time[status], na.rm = TRUE),
+      surv_fit = list(survfit(Surv(time, status) ~ 1)),
       .groups = "drop"
     ) %>%
     mutate(
-      outbreak_prob = 1 - extinction_prob,
-      outbreak_lower_ci = 1 - upper_ci,
-      outbreak_upper_ci = 1 - lower_ci
+      surv_summary = map(surv_fit, summary),
+      actual_results = map_dbl(surv_summary, ~.x$table["median"]),
+      lower_ci = map_dbl(surv_summary, ~.x$table["0.95LCL"]),
+      upper_ci = map_dbl(surv_summary, ~.x$table["0.95UCL"]),
+      rmst = map_dbl(surv_summary, ~.x$table["rmean"]),
+      rmst_se = map_dbl(surv_summary, ~.x$table["se(rmean)"])
+    ) %>%
+    mutate(
+      # Add time percentiles
+      time_to_25pct = map_dbl(surv_fit, ~quantile(.x, probs = 0.25)$quantile),
+      time_to_50pct = map_dbl(surv_fit, ~quantile(.x, probs = 0.50)$quantile),
+      time_to_75pct = map_dbl(surv_fit, ~quantile(.x, probs = 0.75)$quantile),
+      
+      # Add comparative statistics
+      delay_vs_baseline = if_else(scenario == "B. Pre-flight Day 0", 
+                                  0, 
+                                  actual_results - first(actual_results)),
+      
+      risk_reduction = if_else(scenario == "B. Pre-flight Day 0",
+                               0,
+                               (first(proportion_reached) - proportion_reached) / 
+                                 first(proportion_reached))
     )
+  
+  return(list(
+    results = results,
+    time_to_threshold = time_to_threshold
+  ))
+}
+
+# Update the plotting function to show survival curves - remove debug prints
+plot_time_to_n_cases <- function(data, color_palette, time_to_threshold) {
+  require(survival)
+  
+  # Get unique R and k combinations
+  r_k_combos <- data %>%
+    select(R, k) %>%
+    unique()
+  
+  # Create plots for each R/k combination
+  plots <- lapply(1:nrow(r_k_combos), function(i) {
+    current_R <- r_k_combos$R[i]
+    current_k <- r_k_combos$k[i]
+    
+    # Get data for this R/k combination
+    group_data <- data %>%
+      filter(R == current_R, k == current_k)
+    
+    # Create survival data from pre-computed fits
+    surv_data <- NULL
+    
+    for(j in 1:nrow(group_data)) {
+      # Extract pre-computed survival fit
+      fit <- group_data$surv_fit[[j]]
+      scenario <- group_data$scenario[j]
+      
+      # Create data frame for this scenario and flip the probabilities
+      new_data <- data.frame(
+        time = fit$time,
+        surv = 1 - fit$surv,  # Flip to show probability of reaching threshold
+        lower = 1 - fit$upper,  # Note: upper/lower bounds are swapped when flipping
+        upper = 1 - fit$lower,
+        scenario = scenario,
+        R = current_R,
+        k = current_k,
+        cumulative_cases_threshold = unique(group_data$cumulative_cases_threshold)
+      )
+      
+      # Add to surv_data
+      surv_data <- if(is.null(surv_data)) new_data else rbind(surv_data, new_data)
+    }
+    
+    # Create basic survival plot
+    p <- ggplot(surv_data, aes(x = time, y = surv, color = scenario)) +
+      geom_step() +
+      geom_step(aes(y = lower), linetype = "dashed", alpha = 0.5) +
+      geom_step(aes(y = upper), linetype = "dashed", alpha = 0.5) +
+      scale_color_brewer(palette = color_palette) +
+      labs(
+        x = "Time (days)",
+        y = "Probability of Reaching Threshold",
+        title = sprintf(
+          "Time to %d cases (R=%.1f, k=%.1f)",
+          unique(surv_data$cumulative_cases_threshold),
+          unique(surv_data$R),
+          unique(surv_data$k)
+        )
+      ) +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+    
+    return(list(plot = p))
+  })
+  
+  return(plots)
+}
+
+# Function to calculate extinction probability
+calculate_extinction_probability <- function(data, initial_flight_chains) {
+  # Get all chains that would have flown in baseline
+  flying_chains <- initial_flight_chains %>%
+    filter(will_fly == TRUE) %>%
+    pull(chain) %>%
+    unique()
+  
+  total_flying_chains <- length(flying_chains)
+  
+  # Calculate daily cases with complete time series
+  data %>%
+    filter(destination_infection) %>%
+    mutate(day = floor(time)) %>%
+    group_by(scenario, R, k, chain, day) %>%
+    summarise(daily_cases = n(), .groups = "drop") %>%
+    # Complete with ALL chains that would have flown in baseline
+    complete(
+      day = 0:max(floor(data$time), na.rm = TRUE),
+      nesting(scenario, R, k),
+      chain = flying_chains,
+      fill = list(daily_cases = 0)
+    ) %>%
+    # Calculate cumulative cases for each chain
+    group_by(scenario, R, k, chain) %>%
+    arrange(day) %>%
+    mutate(cum_cases = cumsum(daily_cases)) %>%
+    # Calculate proportion of chains with zero cumulative cases each day
+    group_by(scenario, R, k, day) %>%
+    summarise(
+      extinct = sum(cum_cases == 0),
+      n = n(),
+      .groups = "drop")
 }
 
 # Function to plot outbreak probability
 plot_outbreak_probability <- function(data, color_palette) {
-  ggplot(data, aes(x = day, y = outbreak_prob, colour = scenario)) +
-    geom_step()+
-    geom_ribbon(aes(ymin = outbreak_lower_ci, ymax = outbreak_upper_ci, fill = scenario), alpha = 0.2, colour = NA) +
-    scale_fill_brewer(palette = color_palette) +
-    facet_grid(R ~ size+scenario) +
-    labs(x = "Scenario", y = "Probability", title = "Probability of Outbreak (1 - Extinction Probability)") +
+  ggplot(data, aes(x = day, y = 1 - (extinct / n), colour = scenario)) +
+    geom_line() +
+    facet_grid(R ~ k) +
+    labs(x = "Day", 
+         y = "Probability", 
+         title = "Cumulative Probability of Outbreak (1 - Extinction Probability)") +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
+    theme(legend.position = "bottom")
+}
+
+# Function to calculate time to reach outbreak probability threshold
+calculate_time_to_outbreak_prob <- function(data, prob_threshold = 0.8) {
+  # Find first day reaching threshold for each scenario
+  data %>%
+    mutate(outbreak_prob = 1 - (extinct / n)) %>%
+    filter(outbreak_prob >= prob_threshold) %>%
+    group_by(scenario, R, k) %>%
+    arrange(day) %>%
+    slice(1) %>%
+    summarise(
+      days_to_threshold = first(day),
+      outbreak_prob = first(outbreak_prob),
+      n_chains = first(n),
+      n_outbreaks = first(n - extinct),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      prob_formatted = sprintf("%.1f%%", outbreak_prob * 100),
+      proportion_outbreaks = n_outbreaks / n_chains
+    )
 }

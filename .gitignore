@@ -84,3 +84,6 @@ stan/lognormal
 *.run.xml
 
 Results/
+
+# Add to existing .gitignore
+processing/
