@@ -187,29 +187,50 @@ for (scenario in scenarios) {
 # Run Scenarios
 #############################
 
-# Process each scenario
 tic()
 
-# Define results cache file path
-results_cache <- "processing/all_scenario_results.qs"
+# Create directory for scenario results if it doesn't exist
+scenario_cache_dir <- "processing/scenario_results"
+if (!dir.exists(scenario_cache_dir)) {
+  dir.create(scenario_cache_dir, recursive = TRUE)
+}
 
-# Check if cached results exist and should be used
-if (file.exists(results_cache) && !overwrite_scenarios) {
-  message("Loading cached scenario results...")
-  all_results <- qs::qread(results_cache)
-} else {
-  message("Generating new scenario results...")
+# Function to generate cache filename for a specific scenario and parameters
+get_scenario_cache_file <- function(scenario_name, R, k) {
+  clean_name <- gsub("[^[:alnum:]]", "_", scenario_name)
+  file.path(scenario_cache_dir, 
+            sprintf("scenario_%s_R%.1f_k%.1f.qs", clean_name, R, k))
+}
+
+# Initialize empty list for all results
+all_results <- list()
+
+for (scenario_idx in seq_along(scenarios)) {
+  # Get current scenario
+  current_scenario <- scenarios[[scenario_idx]]
   
-  scenario_results <- list()
-  
-  for (scenario_idx in seq_along(scenarios)) {
-    # Get current scenario
-    current_scenario <- scenarios[[scenario_idx]]
+  # Process each parameter combination
+  for(param_idx in 1:nrow(simulation_params)) {
+    # Generate cache filename for this scenario-parameter combination
+    cache_file <- get_scenario_cache_file(
+      current_scenario$name,
+      simulation_params$R[param_idx],
+      simulation_params$k[param_idx]
+    )
     
-    param_results_list <- list()
-    
-    # Process each parameter combination
-    for(param_idx in 1:nrow(simulation_params)) {
+    # Check if we should use cached results
+    if (file.exists(cache_file) && !overwrite_scenarios) {
+      message(sprintf("Loading cached results for scenario '%s' (R=%.1f, k=%.1f)...",
+                     current_scenario$name,
+                     simulation_params$R[param_idx],
+                     simulation_params$k[param_idx]))
+      param_results <- qs::qread(cache_file)
+    } else {
+      message(sprintf("Processing scenario '%s' (R=%.1f, k=%.1f)...",
+                     current_scenario$name,
+                     simulation_params$R[param_idx],
+                     simulation_params$k[param_idx]))
+      
       # Process scenario for this parameter set
       param_results <- process_scenario(
         all_flight_chains[[param_idx]],
@@ -222,27 +243,34 @@ if (file.exists(results_cache) && !overwrite_scenarios) {
           R = simulation_params$R[param_idx],
           k = simulation_params$k[param_idx],
           total_flying_chains = n_flying_chains[param_idx],
-          scenario_name = current_scenario$name  # Add scenario name to results
+          scenario_name = current_scenario$name
         )
       
-      param_results_list[[param_idx]] <- param_results
+      # Cache the results for this scenario-parameter combination
+      qs::qsave(param_results, cache_file)
     }
     
-    # Combine results for all parameter sets
-    scenario_results[[scenario_idx]] <- bind_rows(param_results_list)
+    # Append to results list
+    all_results[[paste(current_scenario$name, param_idx)]] <- param_results
     
-    # Print progress
-    message(sprintf("Completed scenario %s - %s", 
-                   LETTERS[scenario_idx], 
-                   current_scenario$name))
+    # Clean up to free memory
+    rm(param_results)
+    gc()
   }
   
-  # Combine results from all scenarios into a single dataframe
-  all_results <- bind_rows(scenario_results)
-  
-  # Save the results
-  message("Saving scenario results to cache...")
-  qs::qsave(all_results, results_cache)
+  # Print progress
+  message(sprintf("Completed scenario %s - %s", 
+                 LETTERS[scenario_idx], 
+                 current_scenario$name))
 }
+
+# Combine all results at the end
+message("Combining all results...")
+all_results <- bind_rows(all_results)
+
+# Save the combined results (optional, since we have individual caches)
+final_results_cache <- "processing/all_scenario_results.qs"
+message("Saving combined results to cache...")
+qs::qsave(all_results, final_results_cache)
 
 toc()
