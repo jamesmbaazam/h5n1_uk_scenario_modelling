@@ -36,6 +36,12 @@ for (spec in plot_specs) {
 outbreak_prob <- calculate_extinction_probability(all_results, initial_flight_chains)
 p_outbreak_prob <- plot_outbreak_probability(outbreak_prob, "Set1")
 
+# Save outbreak probability plots
+ggsave("results/outbreak_probability.png", p_outbreak_prob, 
+       width = 12, height = 8, bg = "white", dpi = 600)
+ggsave("results/outbreak_probability.pdf", p_outbreak_prob, 
+       width = 12, height = 8, bg = "white", dpi = 600)
+
 # Calculate time to reach case thresholds
 case_thresholds <- list(
   list(n = 10, name = "time_to_10_cases"),
@@ -45,43 +51,28 @@ case_thresholds <- list(
 # Calculate and plot for each threshold
 threshold_results <- lapply(case_thresholds, function(threshold) {
   results_data <- calculate_time_to_n_cases(all_results, initial_flight_chains, n_cases = threshold$n)
-  plots <- plot_time_to_n_cases(
+  plot <- plot_time_to_n_cases(
     data = results_data$results, 
     color_palette = "Set1", 
     time_to_threshold = results_data$time_to_threshold
   )
   
-  # Save survival plots quietly
-  if(length(plots) > 0) {
-    for(i in seq_along(plots)) {
-      if(!is.null(plots[[i]]$plot)) {
-        plot_name <- sprintf("results/%s_survival_R%.1f_k%.1f", 
-                           threshold$name,
-                           results_data$results$R[i],
-                           results_data$results$k[i])
-        
-        # Save plots without messages
-        suppressMessages({
-          ggsave(paste0(plot_name, ".png"), plots[[i]]$plot,
-                 width = 12, height = 10, bg = "white", dpi = 600)
-          ggsave(paste0(plot_name, ".pdf"), plots[[i]]$plot,
-                 width = 12, height = 10, bg = "white")
-        })
-      }
-    }
-  }
+  # Save survival plot
+  plot_name <- sprintf("results/%s_survival", threshold$name)
+  
+  # Save plots without messages
+  suppressMessages({
+    ggsave(paste0(plot_name, ".png"), plot,
+           width = 12, height = 10, bg = "white", dpi = 600)
+    ggsave(paste0(plot_name, ".pdf"), plot,
+           width = 12, height = 10, bg = "white")
+  })
   
   return(list(
     results = results_data$results,
-    plots = plots
+    plot = plot
   ))
 })
-
-# Save outbreak probability plots
-ggsave("results/outbreak_probability.png", p_outbreak_prob, 
-       width = 12, height = 8, bg = "white", dpi = 600)
-ggsave("results/outbreak_probability.pdf", p_outbreak_prob, 
-       width = 12, height = 8, bg = "white", dpi = 600)
 
 #############################
 # Generate Summary Tables
@@ -179,3 +170,4 @@ if (require(flextable)) {
 } else {
   warning("flextable package not available - tables saved as CSV only")
 }
+

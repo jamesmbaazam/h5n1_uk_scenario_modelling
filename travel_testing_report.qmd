@@ -2,7 +2,7 @@
 
 ## Model Structure and Design
 
-We implemented a stochastic branching process model to simulate international disease spread between the US (origin) and UK (destination). Each simulation began with a single infected case in the US. The number of secondary cases produced by each infected individual was drawn from a negative binomial distribution with mean equal to the reproduction number (R₀=2.0) and dispersion parameter (k=1000). This parameterisation created relatively homogeneous transmission patterns, with limited superspreading events. The timing between successive cases followed a lognormal serial interval distribution fitted to non-zoonotic transmission data. Each transmission chain evolved independently, with subsequent infections occurring according to these parameters.
+We implemented a stochastic branching process model to simulate international disease spread between the US (origin) and UK (destination). Each simulation began with a single infected case in the US. The number of secondary cases produced by each infected individual was drawn from a negative binomial distribution with mean equal to the reproduction number (R₀) and dispersion parameter (k). We explored different transmission scenarios with R₀ values of 1.5 and 2.0, and k values of 0.1 (overdispersed) and 1000 (homogeneous). The timing between successive cases followed a gamma distribution fitted to non-zoonotic influenza serial interval data. Each transmission chain evolved independently, with subsequent infections occurring according to these parameters.
 
 Throughout the simulation, each infected individual had a daily probability of international travel to the UK. This probability was derived from annual US-UK visitor numbers (5.12M visitors/year) and US population data (334.2M). The model tracked both domestic transmission within the US and any new transmission chains initiated in the UK by infected travellers. Cases who travelled could seed new transmission chains in the UK, which then followed the same transmission parameters as the US chains. We ran 10,000 independent transmission chains for 1000 days each to capture the stochastic nature of both transmission and travel events, ensuring robust estimates of outbreak probabilities.
 
@@ -12,13 +12,13 @@ We tested different intervention strategies starting at days 0, 25, 50, 75, and 
 
 The intervention scenarios comprised:
 
-1. Pre-flight testing only: Passengers were tested before departure with time-dependent test sensitivity. Positive cases were prevented from travelling. Test sensitivity varied according to time since infection, reflecting the biological window period of detectability.
+1. Pre-flight testing only: Passengers were tested before departure with time-dependent test sensitivity. Positive cases were prevented from travelling. Test sensitivity was modeled using a COVID-19 PCR sensitivity curve scaled to match the relative duration of influenza's serial interval. This scaling accounts for the reportedly longer progression of H5N1 compared to COVID-19, while maintaining the biological profile of PCR test sensitivity. The sensitivity function incorporates uncertainty through sampling from the 95% confidence intervals of the scaled curve.
 
 2. Post-arrival testing only: Arriving passengers were tested and positive cases entered quarantine. The quarantine period lasted 14 days.
 
 3. Combined pre-flight and post-arrival testing: Both testing stages were implemented, maximising the chance of case detection. This scenario represented the most comprehensive control strategy but required the most resources to implement.
 
-Each testing stage incorporated realistic features including time-dependent test sensitivity, delays in receiving results, and imperfect compliance. Implementation delays accounted for the time needed to establish testing infrastructure and train personnel.
+Each testing stage incorporated realistic features including time-dependent test sensitivity with uncertainty sampling, delays in receiving results, and imperfect compliance. Implementation delays accounted for the time needed to establish testing infrastructure and train personnel.
 
 ## Analysis Methods and Metrics
 

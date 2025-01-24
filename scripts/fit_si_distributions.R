@@ -149,3 +149,31 @@ knitr::kable(
 #--- LOO analysis 
 knitr::kable(loo_compare(fit_lognormal$loo(), fit_gamma$loo()))
 
+# After the LOO analysis and before saving the CSV
+# Summarize the parameters for both distributions
+param_summary <- rbind(
+  dt_lognormal[, .(
+    param = c("meanlog", "sdlog"),
+    median = c(median(`1`), median(`2`)),
+    mean = c(mean(`1`), mean(`2`)),
+    q2.5 = c(quantile(`1`, 0.025), quantile(`2`, 0.025)),
+    q97.5 = c(quantile(`1`, 0.975), quantile(`2`, 0.975))
+  )][, dist := "Lognormal"],
+  
+  dt_gamma[, .(
+    param = c("shape", "rate"),
+    median = c(median(`1`), median(`2`)),
+    mean = c(mean(`1`), mean(`2`)),
+    q2.5 = c(quantile(`1`, 0.025), quantile(`2`, 0.025)),
+    q97.5 = c(quantile(`1`, 0.975), quantile(`2`, 0.975))
+  )][, dist := "Gamma"]
+)
+
+# Print the parameter summary table
+knitr::kable(param_summary, digits = 3)
+
+# Save the parameter summary as CSV
+fwrite(param_summary, "data/si_param_summary.csv")
+
+# Save the serial interval posteriors as CSV
+fwrite(dt_si_posteriors, "data/si_posteriors.csv")

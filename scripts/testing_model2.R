@@ -13,11 +13,6 @@ sim_params <- list(
   stat_threshold = 12
 )
 
-# Define constant sensitivity function
-sensitivity_function <- function(x) {
-  return(0.4)
-}
-
 #############################
 # Calculate Flight Probability
 #############################
@@ -34,24 +29,37 @@ flight_stats <- list(
 # Calculate daily probability of US->UK flight
 daily_flight_probability <- (flight_stats$us_uk_visitors_23 / flight_stats$us_population) / 365
 
+daily_flight_probability*100
 #############################
 # Setup Model Parameters
 #############################
 
 # Define transmission parameters
 simulation_params <- expand_grid(
-  R = c(1.5,2),
-  k = c(0.1,1000)
+  R = c(2),
+  k = c(1000)
 ) %>% 
   mutate(R_k_id = row_number())
 
 # Generate initial branching process chains
-initial_chains <- generate_initial_chains(
-  simulation_params, 
-  n_chains = sim_params$n_chains, 
-  stat_threshold = sim_params$stat_threshold,
-  tmax = sim_params$tmax
-)
+initial_chains_cache <- "processing/initial_chains.qs"
+
+if (file.exists(initial_chains_cache) && !overwrite_initial_chains) {
+  message("Loading cached initial chains...")
+  initial_chains <- qs::qread(initial_chains_cache)
+} else {
+  message("Generating new initial chains...")
+  initial_chains <- generate_initial_chains(
+    simulation_params, 
+    n_chains = sim_params$n_chains, 
+    stat_threshold = sim_params$stat_threshold,
+    tmax = sim_params$tmax
+  )
+  
+  # Save the initial chains
+  qs::qsave(initial_chains, initial_chains_cache)
+  message("Saved initial chains to cache.")
+}
 
 # Initialize flight chains
 tic()
@@ -60,12 +68,12 @@ if (!dir.exists("processing")) {
   dir.create("processing")
 }
 
-# Set overwrite flag for cache control
-overwrite <- TRUE  # Change to TRUE to force regeneration of flight chains
-
 # Process each R and k combination
 all_flight_chains <- list()
 n_flying_chains <- numeric(nrow(simulation_params))
+
+# Define base flight parameters before initialization
+base_flight_params <- list(flight_duration = 0.2)
 
 for(param_idx in 1:nrow(simulation_params)) {
   # Define the cache file path for this parameter combination
@@ -74,7 +82,7 @@ for(param_idx in 1:nrow(simulation_params)) {
                                simulation_params$k[param_idx])
   
   # Load or generate flight chains for this parameter set
-  if (file.exists(flight_chains_cache) && !overwrite) {
+  if (file.exists(flight_chains_cache) && !overwrite_flight_chains) {
     message(sprintf("Loading cached flight chains for R=%.1f, k=%.1f...",
                    simulation_params$R[param_idx],
                    simulation_params$k[param_idx]))
@@ -87,7 +95,8 @@ for(param_idx in 1:nrow(simulation_params)) {
       initial_chains$initial_chain[[param_idx]], 
       daily_flight_probability, 
       si_draws,
-      tmax = sim_params$tmax
+      tmax = sim_params$tmax,
+      scenario = base_flight_params
     )
     
     # Save the flight chains
@@ -100,7 +109,7 @@ for(param_idx in 1:nrow(simulation_params)) {
   
   # Calculate number of unique chains that would fly for this parameter set
   n_flying_chains[param_idx] <- initial_flight_chains %>%
-    filter(will_fly == TRUE) %>%
+    filter(potential_flyer == TRUE) %>%
     pull(chain) %>%
     n_distinct()
   
@@ -128,15 +137,51 @@ base_scenario <- list(
 
 # Define scenarios with different intervention start times
 intervention_days <- c(0, 25, 50, 75, 100)
-scenarios <- lapply(seq_along(intervention_days), function(i) {
-  c(
-    base_scenario,
-    list(
-      name = sprintf("%s. Pre-flight Day %d", LETTERS[i+1], intervention_days[i]),
-      interventions_enacted = intervention_days[i]
+
+# Create no testing baseline scenario
+no_testing <- list(
+  pre = 0,
+  post = 0,
+  pre_delay = NA,
+  post_delay = NA,
+  flight_duration = 0.2,
+  quarantine_duration = 14,
+  name = "A. No Testing",
+  interventions_enacted = 0
+)
+
+# Create other scenarios
+scenarios <- c(
+  list(no_testing),  # Add baseline scenario first
+  lapply(seq_along(intervention_days), function(i) {
+    c(
+      base_scenario,
+      list(
+        name = sprintf("%s. Pre-flight Day %d", LETTERS[i+1], intervention_days[i]),
+        interventions_enacted = intervention_days[i]
+      )
     )
-  )
-})
+  })
+)
+
+# Add debug messages for testing scenarios
+message("\nTesting Scenarios:")
+message("----------------")
+for (scenario in scenarios) {
+  message(sprintf("%s:", scenario$name))
+  if (scenario$pre == 1) {
+    message(sprintf("  - Pre-flight testing starts on day %d", scenario$interventions_enacted))
+    message(sprintf("  - Test occurs %d day(s) before flight", scenario$pre_delay))
+  }
+  if (scenario$post == 1) {
+    message(sprintf("  - Post-flight testing starts on day %d", scenario$interventions_enacted))
+    message(sprintf("  - Test occurs %d day(s) after flight", scenario$post_delay))
+  }
+  if (scenario$pre == 0 && scenario$post == 0) {
+    message("  - No testing implemented")
+  }
+  message("")
+}
 
 #############################
 # Run Scenarios
@@ -144,42 +189,60 @@ scenarios <- lapply(seq_along(intervention_days), function(i) {
 
 # Process each scenario
 tic()
-all_results <- list()
 
-for (scenario_idx in seq_along(scenarios)) {
-  # Get current scenario
-  current_scenario <- scenarios[[scenario_idx]]
+# Define results cache file path
+results_cache <- "processing/all_scenario_results.qs"
+
+# Check if cached results exist and should be used
+if (file.exists(results_cache) && !overwrite_scenarios) {
+  message("Loading cached scenario results...")
+  all_results <- qs::qread(results_cache)
+} else {
+  message("Generating new scenario results...")
   
   scenario_results <- list()
   
-  # Process each parameter combination
-  for(param_idx in 1:nrow(simulation_params)) {
-    # Process scenario for this parameter set
-    param_results <- process_scenario(
-      all_flight_chains[[param_idx]],
-      current_scenario,
-      quarantine_duration = current_scenario$quarantine_duration,
-      tmax = sim_params$tmax
-    ) %>%
-      # Add transmission parameters and flying chains count
-      mutate(
-        R = simulation_params$R[param_idx],
-        k = simulation_params$k[param_idx],
-        total_flying_chains = n_flying_chains[param_idx]
-      )
+  for (scenario_idx in seq_along(scenarios)) {
+    # Get current scenario
+    current_scenario <- scenarios[[scenario_idx]]
     
-    scenario_results[[param_idx]] <- param_results
+    param_results_list <- list()
+    
+    # Process each parameter combination
+    for(param_idx in 1:nrow(simulation_params)) {
+      # Process scenario for this parameter set
+      param_results <- process_scenario(
+        all_flight_chains[[param_idx]],
+        current_scenario,
+        quarantine_duration = current_scenario$quarantine_duration,
+        tmax = sim_params$tmax
+      ) %>%
+        # Add transmission parameters and flying chains count
+        mutate(
+          R = simulation_params$R[param_idx],
+          k = simulation_params$k[param_idx],
+          total_flying_chains = n_flying_chains[param_idx],
+          scenario_name = current_scenario$name  # Add scenario name to results
+        )
+      
+      param_results_list[[param_idx]] <- param_results
+    }
+    
+    # Combine results for all parameter sets
+    scenario_results[[scenario_idx]] <- bind_rows(param_results_list)
+    
+    # Print progress
+    message(sprintf("Completed scenario %s - %s", 
+                   LETTERS[scenario_idx], 
+                   current_scenario$name))
   }
   
-  # Combine results for all parameter sets
-  all_results[[scenario_idx]] <- bind_rows(scenario_results)
+  # Combine results from all scenarios into a single dataframe
+  all_results <- bind_rows(scenario_results)
   
-  # Print progress
-  print(sprintf("Completed scenario %s - %s", 
-                LETTERS[scenario_idx+1], 
-                current_scenario$name))
+  # Save the results
+  message("Saving scenario results to cache...")
+  qs::qsave(all_results, results_cache)
 }
 
-# Combine results from all scenarios
-all_results <- bind_rows(all_results)
 toc()
