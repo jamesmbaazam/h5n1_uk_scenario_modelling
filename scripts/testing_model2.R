@@ -1,4 +1,3 @@
-
 #############################
 # Initialize Simulation
 #############################
@@ -10,7 +9,7 @@ set.seed(123)
 sim_params <- list(
   n_chains = 10000,
   tmax = 1000,
-  stat_threshold = 12
+  stat_threshold = 15
 )
 
 #############################
@@ -30,6 +29,7 @@ flight_stats <- list(
 daily_flight_probability <- (flight_stats$us_uk_visitors_23 / flight_stats$us_population) / 365
 
 daily_flight_probability*100
+
 #############################
 # Setup Model Parameters
 #############################
@@ -42,7 +42,7 @@ simulation_params <- expand_grid(
   mutate(R_k_id = row_number())
 
 # Generate initial branching process chains
-initial_chains_cache <- "processing/initial_chains.qs"
+initial_chains_cache <- file.path(ANALYSIS_CACHE_DIR, "initial_chains.rds")
 
 if (file.exists(initial_chains_cache) && !overwrite_initial_chains) {
   message("Loading cached initial chains...")
@@ -61,7 +61,10 @@ if (file.exists(initial_chains_cache) && !overwrite_initial_chains) {
   message("Saved initial chains to cache.")
 }
 
-# Initialize flight chains
+#############################
+# Initialize Flight Chains
+#############################
+
 tic()
 # Create processing directory if it doesn't exist
 if (!dir.exists("processing")) {
@@ -77,9 +80,9 @@ base_flight_params <- list(flight_duration = 0.2)
 
 for(param_idx in 1:nrow(simulation_params)) {
   # Define the cache file path for this parameter combination
-  flight_chains_cache <- sprintf("processing/initial_flight_chains_R%.1f_k%.1f.qs", 
+  flight_chains_cache <- file.path(ANALYSIS_CACHE_DIR, sprintf("flight_chains_R%.1f_k%.1f.qs", 
                                simulation_params$R[param_idx],
-                               simulation_params$k[param_idx])
+                               simulation_params$k[param_idx]))
   
   # Load or generate flight chains for this parameter set
   if (file.exists(flight_chains_cache) && !overwrite_flight_chains) {
@@ -122,75 +125,18 @@ for(param_idx in 1:nrow(simulation_params)) {
 toc()
 
 #############################
-# Define Intervention Scenarios
-#############################
-
-# Common parameters across scenarios
-base_scenario <- list(
-  pre = 1,
-  post = 0,
-  pre_delay = 1,
-  post_delay = NA,
-  flight_duration = 0.2,
-  quarantine_duration = 14
-)
-
-# Define scenarios with different intervention start times
-intervention_days <- c(0, 25, 50, 75, 100)
-
-# Create no testing baseline scenario
-no_testing <- list(
-  pre = 0,
-  post = 0,
-  pre_delay = NA,
-  post_delay = NA,
-  flight_duration = 0.2,
-  quarantine_duration = 14,
-  name = "A. No Testing",
-  interventions_enacted = 0
-)
-
-# Create other scenarios
-scenarios <- c(
-  list(no_testing),  # Add baseline scenario first
-  lapply(seq_along(intervention_days), function(i) {
-    c(
-      base_scenario,
-      list(
-        name = sprintf("%s. Pre-flight Day %d", LETTERS[i+1], intervention_days[i]),
-        interventions_enacted = intervention_days[i]
-      )
-    )
-  })
-)
-
-# Add debug messages for testing scenarios
-message("\nTesting Scenarios:")
-message("----------------")
-for (scenario in scenarios) {
-  message(sprintf("%s:", scenario$name))
-  if (scenario$pre == 1) {
-    message(sprintf("  - Pre-flight testing starts on day %d", scenario$interventions_enacted))
-    message(sprintf("  - Test occurs %d day(s) before flight", scenario$pre_delay))
-  }
-  if (scenario$post == 1) {
-    message(sprintf("  - Post-flight testing starts on day %d", scenario$interventions_enacted))
-    message(sprintf("  - Test occurs %d day(s) after flight", scenario$post_delay))
-  }
-  if (scenario$pre == 0 && scenario$post == 0) {
-    message("  - No testing implemented")
-  }
-  message("")
-}
-
-#############################
 # Run Scenarios
 #############################
 
 tic()
 
-# Create directory for scenario results if it doesn't exist
-scenario_cache_dir <- "processing/scenario_results"
+# Create directory for scenario results based on scenario set
+scenario_cache_dir <- if(SCENARIO_SET == 1) {
+  "processing/scenario_results"
+} else {
+  "processing/scenario_results_set2"
+}
+
 if (!dir.exists(scenario_cache_dir)) {
   dir.create(scenario_cache_dir, recursive = TRUE)
 }
@@ -259,17 +205,22 @@ for (scenario_idx in seq_along(scenarios)) {
   }
   
   # Print progress
-  message(sprintf("Completed scenario %s - %s", 
-                 LETTERS[scenario_idx], 
-                 current_scenario$name))
+  message(sprintf("Completed scenario %s", current_scenario$name))
 }
 
 # Combine all results at the end
 message("Combining all results...")
-all_results <- bind_rows(all_results)
+all_results <- bind_rows(all_results) %>%
+  # Ensure scenario_name is present and correct
+  mutate(scenario_name = as.character(scenario_name))  # Convert to character if needed
 
-# Save the combined results (optional, since we have individual caches)
-final_results_cache <- "processing/all_scenario_results.qs"
+# Save the combined results with set-specific filename
+final_results_cache <- if(SCENARIO_SET == 1) {
+  "processing/all_scenario_results.qs"
+} else {
+  "processing/all_scenario_results_set2.qs"
+}
+
 message("Saving combined results to cache...")
 qs::qsave(all_results, final_results_cache)
 

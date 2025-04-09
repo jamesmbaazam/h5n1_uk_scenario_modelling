@@ -19,7 +19,7 @@ generate_initial_chains <- function(simulation_params, n_chains, stat_threshold,
         rnbinom(n, mu = current_R, size = current_k)
       },
       stat_threshold = stat_threshold,
-      generation_time = function(n) sample(x = si_draws, size = n, replace = TRUE),
+      generation_time = si_draws,  # Pass the function directly
       tf = tmax
     )
   }
@@ -38,8 +38,9 @@ initialize_flight_chains <- function(chain_data, daily_flight_probability, si_dr
   n_cases <- nrow(dt)
   message(sprintf("Processing %d cases", n_cases))
   
-  # Initial flight assignments
-  dt[, potential_flyer := rbinom(n_cases, 1, daily_flight_probability) == 1]
+  # Initial flight assignments - mark all potential flyers
+  dt[, potential_flyer := FALSE]  # Initialize all as FALSE
+  dt[, potential_flyer := rbinom(.N, 1, daily_flight_probability) == 1]
   n_flyers <- sum(dt$potential_flyer)
   message(sprintf("Identified %d potential flyers (%.1f%%)", n_flyers, 100*n_flyers/n_cases))
   
@@ -77,6 +78,8 @@ initialize_flight_chains <- function(chain_data, daily_flight_probability, si_dr
       current_case <- dt[.(current_chain, current_case), infector]
       if(dt[.(current_chain, current_case), potential_flyer]) {
         flyers[i, is_first_flight := FALSE]
+        # Set potential_flyer to FALSE for non-first flyers
+        dt[.(current_chain, flyers[i]$infectee), potential_flyer := FALSE]
         break
       }
     }
@@ -84,7 +87,7 @@ initialize_flight_chains <- function(chain_data, daily_flight_probability, si_dr
   
   # Keep only first flyers and set their flight times
   first_flyers <- flyers[is_first_flight == TRUE]
-  first_flyers[, flight_delay := sample(si_draws, .N, replace = TRUE)]
+  first_flyers[, flight_delay := si_draws(.N)]  # Use si_draws function directly
   first_flyers[, ':='(
     flight_time = time + flight_delay,
     flight_end = time + flight_delay + scenario$flight_duration
@@ -124,8 +127,7 @@ initialize_flight_chains <- function(chain_data, daily_flight_probability, si_dr
   # Add flight times from first flyers
   result[, ':='(
     flight_time = NA_real_,
-    flight_end = NA_real_,
-    potential_flyer = FALSE
+    flight_end = NA_real_
   )]
   
   # Update flight times and potential_flyer status for each chain
@@ -133,8 +135,7 @@ initialize_flight_chains <- function(chain_data, daily_flight_probability, si_dr
     current_chain <- first_flyers[i, chain]
     result[chain == current_chain, ':='(
       flight_time = first_flyers[i, flight_time],
-      flight_end = first_flyers[i, flight_end],
-      potential_flyer = first_flyers[i, potential_flyer]
+      flight_end = first_flyers[i, flight_end]
     )]
   }
   
@@ -313,15 +314,90 @@ process_scenario <- function(flying_chains, scenario, quarantine_duration = 14, 
     time_since_infection_post = i.time_since_infection_post
   )]
   
-  # Calculate destination infections based on flyer times
+  # First, add a function to determine if a case can transmit at a given time
+  can_transmit <- function(time, quarantine_end, flight_end) {
+    # Vectorized version
+    no_quarantine <- is.na(quarantine_end) | is.infinite(quarantine_end)
+    
+    # If no quarantine, can transmit after flight
+    # If quarantine exists, can only transmit after both flight and quarantine end
+    ifelse(no_quarantine,
+           time > flight_end,
+           time > flight_end & time > quarantine_end)
+  }
+  
+  # In process_scenario function, modify how we handle destination infections:
   result[, ':='(
-    destination_infection = 
-      !is.na(flight_end) & 
-      time > flight_end & 
-      (time > quarantine_end | quarantine_end == Inf),
-    scenario = scenario$name
+    destination_infection = can_transmit(time, quarantine_end, flight_end),
+    # Track if infection occurred post-quarantine
+    post_quarantine_infection = !is.na(quarantine_end) & 
+                              time > quarantine_end & 
+                              time > flight_end,
+    # Add field to track quarantine effectiveness
+    quarantine_prevented = !is.na(quarantine_end) & 
+                          time > flight_end & 
+                          time <= quarantine_end,
+    # Add scenario name as character
+    scenario_name = scenario$name  # Changed from scenario to scenario$name
   )]
   
+  # Remove the summary statistics calculation since it's not being used
   setorder(result, chain, generation, time)
   return(as.data.frame(result))
+}
+
+calculate_time_to_n_cases <- function(all_results, initial_flight_chains, n_cases) {
+  # Convert inputs to data.table for efficiency
+  dt <- data.table::as.data.table(all_results)
+  
+  # Calculate cumulative cases by scenario and chain
+  cases_by_chain <- dt[, .(
+    cumulative_cases = cumsum(destination_infection),
+    time = time
+  ), by = .(scenario_name, chain)]
+  
+  # Find first time each chain reaches n cases
+  time_to_threshold <- cases_by_chain[
+    cumulative_cases >= n_cases, 
+    .(time_to_threshold = min(time)), 
+    by = .(scenario_name, chain)
+  ]
+  
+  # Calculate summary statistics by scenario
+  results <- time_to_threshold[, .(
+    mean_time = mean(time_to_threshold),
+    median_time = median(time_to_threshold),
+    sd_time = sd(time_to_threshold),
+    time_to_25pct = quantile(time_to_threshold, 0.25),
+    time_to_50pct = quantile(time_to_threshold, 0.50),
+    time_to_75pct = quantile(time_to_threshold, 0.75),
+    n_chains_reached_threshold = .N
+  ), by = scenario_name]
+  
+  # Count total chains per scenario
+  total_chains <- dt[, .(total_flying_chains = length(unique(chain))), by = scenario_name]
+  results <- merge(results, total_chains, by = "scenario_name")
+  
+  # Calculate proportion of chains that reached threshold
+  results[, proportion_reached := n_chains_reached_threshold / total_flying_chains]
+  
+  # Calculate delay vs baseline (using first scenario as baseline)
+  baseline_time <- results[1, median_time]
+  results[, delay_vs_baseline := median_time - baseline_time]
+  
+  # Calculate risk reduction (ensure no division by zero)
+  baseline_prop <- results[1, proportion_reached]
+  
+  # Fix: Calculate risk reduction for each row properly
+  results[, risk_reduction := {
+    test_vec <- rep(baseline_prop > 0, .N)  # Repeat test for each row
+    yes_vec <- 100 * (1 - proportion_reached/baseline_prop)  # Calculate for each row
+    no_vec <- rep(NA_real_, .N)  # NA for each row
+    fifelse(test_vec, yes_vec, no_vec)
+  }]
+  
+  return(list(
+    results = results,
+    time_to_threshold = time_to_threshold
+  ))
 }
