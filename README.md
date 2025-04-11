@@ -85,3 +85,25 @@ and generate the plots is in `scripts/outbreak_distribution.R`. The
 plots are included in the `plot` folder, including the The
 [`outbreak_size` plot](plots/outbreak_size.png) and [`outbreak_length`
 plot](plots/outbreak_length.png).
+
+## Other branches
+
+This repository contains other branches which contain code that was
+written in the process of developing and writing [this
+manuscript](https://doi.org/10.1101/2024.12.11.24318702). Here we
+briefly describe these branches:
+
+- `bp_report`: This branch contains a report that was written to develop
+  the outbreak distribution analysis and plots while the number of cases
+  reported in the US was increasing during the second half of 2024. It
+  was used as a basis for the outbreak distribution analysis included in
+  the paper but is not itself included as part of the publication. It is
+  not actively updated and the
+  [paper](https://doi.org/10.1101/2024.12.11.24318702) should be
+  referred to for the most up-to-date information.
+
+- `deprecated-models`: This branch includes scripts and functions to run
+  a travel testing model. This was developed while the project was being
+  formulated, but was not included in the final version of the
+  manuscript. The code remains on this branch, to potentially be used
+  for a future analysis.
