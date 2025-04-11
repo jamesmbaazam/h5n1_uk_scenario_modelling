@@ -27,7 +27,7 @@ fs::dir_tree()
 #> ├── README.Rmd
 #> ├── README.md
 #> ├── data
-#> │   ├── Flu_params.xlsx
+#> │   ├── H5N1pptdat.xlsx
 #> │   ├── si_param_summary.csv
 #> │   ├── si_posteriors.csv
 #> │   └── si_raw_data
@@ -35,24 +35,48 @@ fs::dir_tree()
 #> │       └── serial.csv
 #> ├── h5n1_uk_scenario_modelling.Rproj
 #> ├── plots
+#> │   ├── CFR_review.png
+#> │   ├── H7N7_R.png
+#> │   ├── R0_US.png
+#> │   ├── R0_review.png
+#> │   ├── inc_review.png
+#> │   ├── lat_inf_review.png
 #> │   ├── outbreak_length.png
-#> │   └── outbreak_size.png
+#> │   ├── outbreak_size.png
+#> │   ├── serial_review.png
+#> │   └── sero_review.png
 #> ├── posterior_predictive
 #> │   └── dt_draws.rds
 #> └── scripts
+#>     ├── fit_R_H5N1_US.R
+#>     ├── fit_R_H7N7.R
 #>     ├── fit_si_distributions.R
-#>     ├── functions.R
-#>     ├── load_packages.R
-#>     ├── load_params.R
-#>     ├── origin_country_incidence.R
 #>     ├── outbreak_distribution.R
-#>     ├── results.R
-#>     ├── run_analysis.R
-#>     ├── testing_model.R
-#>     └── testing_model2.R
+#>     └── rapid_review_forest_plots.R
 ```
 
 ## Analyses
+
+### H5N1 Epidemiological Parameter Rapid Review
+
+The data for the epidemiological parameters collected from the rapid
+review are stored in the `data/` folder in the `H5N1pptdat.xlsx` file.
+
+These parameters are used to produce the forest plots that can be found
+in the `plots/` folder. These plots have the name `*_review.png`,
+e.g. `inc_review.png` for the incubation periods.
+
+The R script to produce all of the forest plots is the
+`rapid_review_forest_plots.R` file in the `scripts/` folder.
+
+### Reproduction Number Estimation
+
+The scripts to estimate the posterior distribution H5N1 data and H7N7
+data are in `fit_R_H5N1_US.R` and `fit_R_H7N7.R`, respectively. Both in
+the `scripts/` folder.
+
+The posterior distribution plots for the reproduction number estimates
+are both in `plots/`: `R0_US.png` and `H7N7_R.png`.
 
 ### Outbreak size distribution
 
